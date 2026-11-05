@@ -72,3 +72,11 @@ details > summary { cursor: pointer; font-weight: 600; padding: 6px 0; min-heigh
 .tabbar a.active { color: var(--accent); }
 .toast { position: fixed; left: 16px; right: 16px; bottom: calc(76px + env(safe-area-inset-bottom)); max-width: 560px; margin: 0 auto; background: var(--text); color: var(--bg); padding: 12px 14px; border-radius: 10px; z-index: 10; }
 .quote { margin: 8px 0; padding: 6px 10px; border-left: 3px solid var(--line); color: var(--muted); }
+.count { display: inline-block; min-width: 18px; padding: 0 5px; border-radius: 999px; background: var(--bad); color: #fff; font-size: 11px; line-height: 18px; vertical-align: 2px; }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); flex: none; }
+.card.read { opacity: .75; }
+label.check { display: flex; gap: 10px; align-items: flex-start; color: var(--text); font-size: 15px; margin: 12px 0 4px; }
+label.check input { width: 22px; height: 22px; min-height: 0; flex: none; margin-top: 1px; }
+code.topic { display: block; padding: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; font-size: 14px; }
+ol.steps { padding-left: 20px; margin: 8px 0; }
+h3 { font-size: 16px; }

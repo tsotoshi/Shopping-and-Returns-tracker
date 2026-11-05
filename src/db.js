@@ -166,16 +166,30 @@ CREATE TABLE IF NOT EXISTS sync_runs (
   message TEXT
 );
 
+-- Stage 4: reminders. "key" makes each reminder happen once
+-- (e.g. "return:12:2026-11-20:soon" for one item's one deadline).
+CREATE TABLE IF NOT EXISTS notifications (
+  id INTEGER PRIMARY KEY,
+  key TEXT NOT NULL UNIQUE,
+  kind TEXT NOT NULL,
+  item_id INTEGER REFERENCES items(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  private_body TEXT,                       -- version without item names, for push
+  is_sample INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  read_at TEXT,
+  delivered_at TEXT,                       -- sent to push/email (or decided not to)
+  delivery_note TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_order ON items(order_id);
 CREATE INDEX IF NOT EXISTS idx_events_item ON events(item_id);
 `;
 
-export const DEFAULT_SETTINGS = {
-  refund_reminder_days: '10', // used when retailer refund timing is unknown
-  snooze_days: '3', // "Not yet — remind me again"
-  overdue_grace_days: '7', // days after the posting window before "overdue"
-  deadline_warning_days: '14', // show return deadlines this far ahead
-};
+// Settings live in src/settings.js; re-exported here so existing imports keep working.
+export { getSettings } from './settings.js';
+import { seedSettings } from './settings.js';
 
 export function openDb(file = process.env.DB_PATH || './data/tracker.sqlite') {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -184,8 +198,7 @@ export function openDb(file = process.env.DB_PATH || './data/tracker.sqlite') {
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
   migrate(db);
-  const ins = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
-  for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
+  seedSettings(db);
   return db;
 }
 
@@ -201,13 +214,3 @@ function migrate(db) {
   ensureColumn(db, 'items', 'policy_user_url', 'TEXT'); // a policy link you supplied (Stage 3)
 }
 
-export function getSettings(db) {
-  const rows = db.prepare('SELECT key, value FROM settings').all();
-  const s = Object.fromEntries(rows.map((r) => [r.key, r.value]));
-  return {
-    refundReminderDays: Number(s.refund_reminder_days),
-    snoozeDays: Number(s.snooze_days),
-    overdueGraceDays: Number(s.overdue_grace_days),
-    deadlineWarningDays: Number(s.deadline_warning_days),
-  };
-}

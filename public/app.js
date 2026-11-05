@@ -434,8 +434,47 @@ async function renderSettings() {
       <button class="btn grow" id="clear" ${d.hasSampleData ? '' : 'disabled'}>Remove sample data</button></div>
     </div>
 
+    <h2>Background checks</h2>
+    <form class="card settings-form">
+      <label>Check Gmail for new emails automatically</label>
+      <select name="autoSyncHours">${[0, 1, 3, 6, 12, 24].map((h) => `<option value="${h}" ${s.autoSyncHours === h ? 'selected' : ''}>${h === 0 ? 'Off — only when I tap Sync' : `Every ${h} hour${h === 1 ? '' : 's'}`}</option>`).join('')}</select>
+      <label class="check"><input type="checkbox" name="autoReview" ${s.autoReview ? 'checked' : ''}> <span>Automatically review return policies for new items <span class="muted">(uses Anthropic credit)</span></span></label>
+      <p class="small muted">Background checks only run while the app is running on your computer. ${status.background?.lastRunAt ? `Last run: ${new Date(status.background.lastRunAt).toLocaleString()}${status.background.last?.errors?.length ? ` — ${esc(status.background.last.errors[0])}` : ''}.` : ''}</p>
+      <div class="actions"><button class="btn primary">Save</button><button class="btn" type="button" id="run-now">Run checks now</button></div>
+    </form>
+
+    <h2>Notifications</h2>
+    <div class="card">
+      <h3>Phone notifications (ntfy)</h3>
+      ${s.ntfyTopic ? `<p class="small"><span class="badge ok">On</span> Sending to topic <code>${esc(s.ntfyTopic)}</code>.</p>` : '<p class="small">Get reminders on your phone with the free <strong>ntfy</strong> app.</p>'}
+      <details ${s.ntfyTopic ? '' : 'open'}><summary class="small">${s.ntfyTopic ? 'Setup steps' : 'Set it up (2 minutes)'}</summary>
+        <ol class="small steps">
+          <li>Install <strong>ntfy</strong> from the App Store.</li>
+          <li>In ntfy, tap <strong>+</strong>, then subscribe to this topic name:</li>
+        </ol>
+        <div class="row"><code class="grow topic" id="topic">${esc(s.ntfyTopic || newTopic())}</code><button class="btn" type="button" id="copy-topic">Copy</button></div>
+        <p class="small muted">Treat the topic like a password: anyone who knows it can read these notifications. ${s.ntfyTopic ? '' : 'This one was generated randomly for you.'}</p>
+        <div class="actions"><button class="btn primary" type="button" id="save-topic">${s.ntfyTopic ? 'Save topic' : 'Turn on phone notifications'}</button>${s.ntfyTopic ? '<button class="btn danger" type="button" id="clear-topic">Turn off</button>' : ''}</div>
+      </details>
+      <h3 style="margin-top:16px">Email</h3>
+      ${status.notify.emailConfigured
+        ? `<form class="settings-form"><label class="check"><input type="checkbox" name="emailEnabled" ${s.emailEnabled ? 'checked' : ''}> <span>Email reminders to ${esc(status.notify.emailTo)}</span></label><div class="actions"><button class="btn">Save</button></div></form>`
+        : '<p class="small muted">Optional. Add your email provider\'s SMTP settings to <code>.env</code> (see README) to get reminders by email.</p>'}
+      <form class="settings-form">
+        <h3 style="margin-top:16px">What and when</h3>
+        <label class="check"><input type="checkbox" name="pushIncludeNames" ${s.pushIncludeNames ? 'checked' : ''}> <span>Include item names in phone notifications</span></label>
+        <p class="small muted">Off: "An item's return deadline is tomorrow." On: "Desk Lamp: return by tomorrow." Emails always include names.</p>
+        <label>Remind me this many days before a return deadline</label>
+        <input name="remindBeforeDays" type="number" min="1" max="30" value="${s.remindBeforeDays}">
+        <label>Quiet hours (no notifications)</label>
+        <div class="row"><select name="quietStart" aria-label="Quiet hours start">${hourOptions(s.quietStart)}</select><span>to</span><select name="quietEnd" aria-label="Quiet hours end">${hourOptions(s.quietEnd)}</select></div>
+        <p class="small muted">Set both to the same time to turn quiet hours off. Reminders during quiet hours are sent when they end.</p>
+        <div class="actions"><button class="btn primary">Save</button><button class="btn" type="button" id="test-notify" ${s.ntfyTopic || (status.notify.emailConfigured && s.emailEnabled) ? '' : 'disabled'}>Send test notification</button></div>
+      </form>
+    </div>
+
     <h2>Reminders</h2>
-    <form class="card" id="settings">
+    <form class="card settings-form">
       <label>Default refund reminder (calendar days) — used when the retailer's refund timing is unknown</label>
       <input name="refundReminderDays" type="number" min="1" max="365" value="${s.refundReminderDays}">
       <label>"Not yet — remind me again" waits (days)</label>
@@ -465,10 +504,66 @@ async function renderSettings() {
   });
   document.getElementById('load').onclick = async () => { await api('/sample/load', {}); toast('Sample data loaded'); renderSettings(); refreshBanner(); };
   document.getElementById('clear').onclick = async () => { await api('/sample/clear', {}); toast('Sample data removed'); renderSettings(); refreshBanner(); };
-  document.getElementById('settings').onsubmit = async (e) => {
+  // Every settings form saves only its own fields (checkboxes send true/false).
+  app.querySelectorAll('.settings-form').forEach((form) => form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    try { await api('/settings', Object.fromEntries(new FormData(e.target))); toast('Settings saved'); } catch (err) { toast(err.message); }
+    const body = {};
+    for (const el of form.elements) {
+      if (!el.name) continue;
+      body[el.name] = el.type === 'checkbox' ? el.checked : el.value;
+    }
+    try { await api('/settings', body); toast('Settings saved'); renderSettings(); } catch (err) { toast(err.message); }
+  }));
+  const topic = () => document.getElementById('topic').textContent.trim();
+  document.getElementById('copy-topic').onclick = async () => {
+    try { await navigator.clipboard.writeText(topic()); toast('Topic copied — paste it in the ntfy app'); } catch { toast('Copy failed — select the text and copy it manually'); }
   };
+  document.getElementById('save-topic').onclick = async () => {
+    try { await api('/settings', { ntfyTopic: topic() }); toast('Phone notifications on. Tap "Send test notification" to check.'); renderSettings(); } catch (err) { toast(err.message); }
+  };
+  document.getElementById('clear-topic')?.addEventListener('click', async () => { await api('/settings', { ntfyTopic: '' }); toast('Phone notifications off'); renderSettings(); });
+  document.getElementById('test-notify').onclick = async () => {
+    try {
+      const r = await api('/notifications/test', {});
+      toast(r.results.map((x) => `${x.channel}: ${x.ok ? 'sent ✓' : `failed (${x.error})`}`).join(' · '));
+    } catch (err) { toast(err.message); }
+  };
+  document.getElementById('run-now').onclick = async (e) => {
+    e.target.disabled = true; e.target.textContent = 'Running…';
+    try {
+      const r = await api('/background/run', {});
+      toast(r.errors?.length ? `Done with problems: ${r.errors[0]}` : `Done. ${r.sync ? `Sync: ${r.sync.imported} new. ` : ''}${r.remindersCreated} new reminder${r.remindersCreated === 1 ? '' : 's'}.`);
+    } catch (err) { toast(err.message); }
+    renderSettings();
+  };
+}
+
+function newTopic() {
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return 'returns-' + [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('');
+}
+function hourOptions(selected) {
+  return Array.from({ length: 24 }, (_, h) => `<option value="${h}" ${h === selected ? 'selected' : ''}>${new Date(2000, 0, 1, h).toLocaleTimeString([], { hour: 'numeric' })}</option>`).join('');
+}
+
+const ALERT_ICON = { return_deadline: '⏰', dropoff: '📦', refund_check: '💳', refund_overdue: '⚠️', gmail_reconnect: '🔌' };
+
+async function renderAlerts() {
+  const d = await api('/notifications');
+  app.innerHTML = `
+    <div class="row" style="margin-top:4px"><h1>Alerts</h1>${d.unread ? '<button class="btn" id="read-all">Mark all read</button>' : ''}</div>
+    <p class="small muted">Reminders about deadlines and refunds. Turn on phone notifications in <a href="#/settings">Settings</a> to get these on your lock screen.</p>
+    ${d.notifications.length ? d.notifications.map((n) => `
+      <a class="card link ${n.read_at ? 'read' : 'unread'}" href="${n.item_id ? `#/item/${n.item_id}` : '#/settings'}" data-nid="${n.id}">
+        <div class="row"><div class="grow"><div class="title">${ALERT_ICON[n.kind] ?? '🔔'} ${esc(n.title)}</div>
+        <div class="small">${esc(n.body)}</div>
+        <div class="small muted">${new Date(n.created_at.replace(' ', 'T') + 'Z').toLocaleString()}${n.delivery_note ? ` · ${esc(n.delivery_note)}` : ''}</div></div>
+        ${n.read_at ? '' : '<span class="dot" aria-label="Unread"></span>'}</div>
+        ${n.is_sample ? '<div style="margin-top:6px"><span class="badge sample">Sample</span></div>' : ''}
+      </a>`).join('') : '<div class="empty">No alerts yet. Reminders appear here when a deadline is near or a refund needs checking.</div>'}
+  `;
+  app.querySelectorAll('[data-nid]').forEach((a) => a.addEventListener('click', () => api(`/notifications/${a.dataset.nid}/read`, {}).catch(() => {})));
+  document.getElementById('read-all')?.addEventListener('click', async () => { await api('/notifications/all/read', {}); renderAlerts(); refreshBanner(); });
 }
 
 // ---------- router ----------
@@ -476,18 +571,23 @@ async function refreshBanner() {
   try {
     const d = await api('/dashboard');
     document.getElementById('sample-banner').hidden = !d.hasSampleData;
+    const n = await api('/notifications');
+    const badge = document.getElementById('alert-count');
+    badge.textContent = n.unread > 9 ? '9+' : String(n.unread);
+    badge.hidden = !n.unread;
   } catch { /* ignore */ }
 }
 
 async function route() {
   const hash = location.hash || '#/';
-  const tab = hash.startsWith('#/items') || hash.startsWith('#/item/') ? 'items' : hash.startsWith('#/settings') ? 'settings' : 'home';
+  const tab = hash.startsWith('#/items') || hash.startsWith('#/item/') ? 'items' : hash.startsWith('#/settings') ? 'settings' : hash.startsWith('#/alerts') ? 'alerts' : 'home';
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
   try {
     const m = hash.match(/^#\/item\/(\d+)/);
     if (m) await renderItem(m[1]);
     else if (tab === 'items') await renderItems();
     else if (tab === 'settings') await renderSettings();
+    else if (tab === 'alerts') await renderAlerts();
     else await renderHome();
   } catch (e) {
     app.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`;

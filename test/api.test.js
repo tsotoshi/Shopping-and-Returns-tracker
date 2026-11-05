@@ -59,3 +59,16 @@ test('policy review explains when AI is not set up', () => withServer(async (cal
   assert.match(r.body.error, /ANTHROPIC_API_KEY/);
   assert.equal((await call('/status')).body.ai.configured, false);
 }));
+
+test('alerts and background endpoints', () => withServer(async (call) => {
+  await call('/sample/load', {});
+  const n = (await call('/notifications')).body;
+  assert.ok(n.unread >= 1);
+  assert.ok(n.notifications.every((x) => x.is_sample === 1));
+  assert.equal((await call('/notifications/all/read', {})).body.unread, 0);
+  const t = await call('/notifications/test', {});
+  assert.equal(t.status, 400);
+  const run = (await call('/background/run', {})).body;
+  assert.deepEqual(run.errors, []);
+  assert.equal((await call('/status')).body.notify.push, false);
+}));

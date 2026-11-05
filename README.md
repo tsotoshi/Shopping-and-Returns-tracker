@@ -2,7 +2,7 @@
 
 A personal, phone-friendly app that tracks purchases and returns, and follows every refund until **you** confirm the money reached your account.
 
-> **Current status: Stage 3 of 4.** Real Gmail import (read-only) for Amazon and AI return-policy review work. Push/email notifications and background sync come in Stage 4. Sample data is still available and always labeled.
+> **Current status: all 4 stages built.** Read-only Gmail import for Amazon, AI return-policy review, refund follow-up, background sync, and reminders (in-app, phone push via ntfy, optional email). Sample data is still available and always labeled.
 
 ## Run it
 
@@ -42,6 +42,17 @@ How it stays honest:
 - If you've corrected an item's deadline, new AI results become suggestions you can accept or reject.
 - Reviews only run when you tap a button, and each one uses a little of your Anthropic credit. Sample items are never sent.
 
+## Reminders and notifications
+
+The app creates reminders when a return deadline is near (default: 3 days before, plus the last day), a drop-off is due, a refund should have arrived, a refund is overdue, or Gmail needs reconnecting. Each reminder happens **once**. Snoozing a refund check ("Not yet") allows a new reminder on the new date.
+
+- **In the app:** the **Alerts** tab.
+- **Phone push (ntfy):** install the free *ntfy* app, then in Settings → Notifications, copy the generated topic, subscribe to it in ntfy, and tap **Turn on**. Item names are left out of push messages unless you turn that on, because anyone who knows the topic can read them.
+- **Email (optional):** add your provider's SMTP settings to `.env` (see `.env.example`), then enable it in Settings. The app never sends through Gmail; that connection stays read-only.
+- **Quiet hours** (default 9pm–8am): reminders wait until morning. Sample-data reminders stay in the app.
+
+**Background checks** run every 15 minutes while the app is running: Gmail sync when due (default every 6 hours, adjustable or off), optional automatic AI reviews (off by default, since they cost money), then reminders. On a computer that's asleep, nothing runs until it wakes up.
+
 ## Use it from your phone
 
 By default the app only accepts connections from the computer it runs on. To open it from your phone on the same Wi-Fi, set `APP_PASSWORD=something-long` in `.env` and restart. Then visit `http://<your-computer's-IP>:3000` and log in with any username and that password. Connect Gmail from the computer itself (Google only redirects back to `localhost`); after that, syncing works from the phone.
@@ -53,7 +64,7 @@ By default the app only accepts connections from the computer it runs on. To ope
 | 1 | Data model, the nine item stages, deadline and refund math, email-matching pipeline, dashboard, item page, tests | ✅ Done |
 | 2 | Gmail OAuth (read-only), Amazon email parser, "Sync emails", optional app password | ✅ Done |
 | 3 | AI return-policy review with verified quotes, policy links you supply, accept or reject suggestions | ✅ Done |
-| 4 | Background sync, push or email notifications, more retailers | Next |
+| 4 | Background sync, reminders, Alerts tab, phone push (ntfy), optional email, quiet hours | ✅ Done |
 
 ## How it's organized
 
@@ -79,6 +90,10 @@ src/
   services/sync.js  "Sync emails": fetch → skip seen → parse → import
   ai/policyReview.js  what's sent to the AI, its rules, and quote verification
   services/policyReviews.js  batches items, saves verified results
+  services/reminders.js  what deserves a reminder (each happens once)
+  services/scheduler.js  background sync, optional reviews, reminders
+  notify/channels.js  ntfy push + SMTP email, quiet hours, retries
+  settings.js     every setting with its type, limits and default
   sample/           labeled sample data, imported through the real pipeline
   db.js           SQLite schema
   app.js          JSON API + serves public/
@@ -100,4 +115,6 @@ test/             node:test tests
 Everything, including your Gmail token, lives in `data/tracker.sqlite` on the machine running the app. Nothing is stored in the browser or in git.
 
 - **Gmail → app:** only emails matching the Amazon search. The app keeps the extracted details (order number, items, prices, dates, links) and the subject, not full email bodies.
-- **App → Anthropic (only when you tap a review button):** the store name, each item's name and seller, its order, delivery and return dates, and any policy link you added. *Not* sent: prices, order numbers, payment methods, your email address or any email text.
+- **App → ntfy (only if you turn on phone notifications):** reminder text. Item names are left out unless you opt in.
+- **App → your email provider (only if you set up email):** reminder text, including item names.
+- **App → Anthropic (when you tap a review button, or if you turn on automatic reviews):** the store name, each item's name and seller, its order, delivery and return dates, and any policy link you added. *Not* sent: prices, order numbers, payment methods, your email address or any email text.

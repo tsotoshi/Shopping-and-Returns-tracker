@@ -4,7 +4,8 @@
 import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { getSettings, DEFAULT_SETTINGS } from './db.js';
+import { getSettings } from './db.js';
+import { updateSettings, SettingsError } from './settings.js';
 import { todayISO } from './lib/dates.js';
 import { STAGES } from './lib/stages.js';
 import { dashboard, listItems, itemDetail, stores } from './services/queries.js';
@@ -18,6 +19,9 @@ import { createGmailClient } from './gmail/client.js';
 import { syncGmail, lastSyncRun, isSyncing } from './services/sync.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { reviewPolicies, itemsNeedingReview, isReviewing, setPolicyLink } from './services/policyReviews.js';
+import { recordReminders, listNotifications, unreadCount, markRead } from './services/reminders.js';
+import { makeChannels, deliverPending, sendTest, emailConfig } from './notify/channels.js';
+import { createScheduler } from './services/scheduler.js';
 
 // Turn AI API errors into plain-English messages (typed classes, not string matching).
 function aiErrorMessage(e) {
@@ -53,6 +57,9 @@ export function createApp(db, {
   aiConfigured = !!process.env.ANTHROPIC_API_KEY,
   // The SDK reads ANTHROPIC_API_KEY from the environment; the key never reaches the browser.
   makeAiClient = () => new Anthropic(),
+  email = emailConfig(),
+  notifyChannels = (settings) => makeChannels({ settings, fetchImpl, email }),
+  now = () => new Date(),
 } = {}) {
   const app = express();
   if (appPassword) app.use(passwordGate(appPassword));
@@ -112,6 +119,8 @@ export function createApp(db, {
       syncing: isSyncing(),
     },
     ai: { configured: aiConfigured, reviewing: isReviewing(), pending: itemsNeedingReview(db).length },
+    notify: { push: !!getSettings(db).ntfyTopic, emailConfigured: email.configured, emailTo: email.configured ? email.to : null, unread: unreadCount(db) },
+    background: app.locals.scheduler?.status() ?? null,
     retailers: Object.values(RETAILERS).map((r) => ({ id: r.id, name: r.name, parserReady: !!r.parse })),
     today: today(),
     };
@@ -179,13 +188,7 @@ export function createApp(db, {
 
   api.get('/settings', wrap(() => getSettings(db)));
   api.post('/settings', wrap((req) => {
-    const map = { refundReminderDays: 'refund_reminder_days', snoozeDays: 'snooze_days', overdueGraceDays: 'overdue_grace_days', deadlineWarningDays: 'deadline_warning_days' };
-    for (const [k, col] of Object.entries(map)) {
-      if (req.body[k] == null) continue;
-      const n = Number(req.body[k]);
-      if (!Number.isInteger(n) || n < 1 || n > 365) throw new items.UserError(`${k} must be a whole number from 1 to 365`);
-      db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(String(n), col);
-    }
+    try { updateSettings(db, req.body); } catch (e) { if (e instanceof SettingsError) throw new items.UserError(e.message); throw e; }
     // Re-run refund windows so a new default reminder interval takes effect.
     for (const r of db.prepare("SELECT item_id FROM refunds WHERE status IN ('pending','issued','partial','problem')").all()) {
       items.recomputeRefundWindow(db, r.item_id);
@@ -193,8 +196,30 @@ export function createApp(db, {
     return getSettings(db);
   }));
 
+  // ---- Stage 4: reminders, notifications, background work ----
+  const channelsNow = () => notifyChannels(getSettings(db));
+  const scheduler = createScheduler(db, {
+    gmailReady: () => google.configured,
+    makeGmailClient,
+    aiReady: () => aiConfigured,
+    makeAiClient,
+    today,
+    now,
+    deliver: (opts) => deliverPending(db, { ...opts, channels: channelsNow() }),
+  });
+  app.locals.scheduler = scheduler; // server.js starts it; tests call tick() directly
+
+  api.get('/notifications', wrap(() => {
+    recordReminders(db, today()); // keep the in-app list current even between background runs
+    return { notifications: listNotifications(db), unread: unreadCount(db) };
+  }));
+  api.post('/notifications/:id/read', wrap((req) => { markRead(db, req.params.id === 'all' ? 'all' : Number(req.params.id)); return { unread: unreadCount(db) }; }));
+  api.post('/notifications/test', async (req, res) => {
+    try { res.json({ results: await sendTest(db, { channels: channelsNow() }) }); } catch (e) { res.status(400).json({ error: e.message }); }
+  });
+  api.post('/background/run', async (req, res) => res.json(await scheduler.tick()));
+
   app.use('/api', api);
   return app;
 }
 
-export { DEFAULT_SETTINGS };
