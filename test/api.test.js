@@ -5,7 +5,7 @@ import { createApp } from '../src/app.js';
 
 async function withServer(fn) {
   const db = openDb(':memory:');
-  const server = createApp(db, { today: () => '2026-11-05' }).listen(0);
+  const server = createApp(db, { today: () => '2026-11-05', google: { configured: false } }).listen(0);
   const base = `http://127.0.0.1:${server.address().port}/api`;
   const call = async (path, body) => {
     const res = await fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -16,8 +16,8 @@ async function withServer(fn) {
 
 test('sync is honest that Gmail is not connected', () => withServer(async (call) => {
   const r = await call('/sync', {});
-  assert.equal(r.status, 501);
-  assert.match(r.body.error, /not connected/);
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /not set up|Connect Gmail/);
   assert.equal((await call('/status')).body.gmail.connected, false);
 }));
 

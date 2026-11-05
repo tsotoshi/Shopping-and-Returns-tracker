@@ -12,7 +12,9 @@
 //   items: [{ name, retailerItemId, quantity, unitPriceCents, seller, refundCents }],
 //   estimatedDeliveryDate, deliveredDate,
 //   dropoffBy, labelUrl, qrUrl, instructions,  // return_started
-//   refundCents, refundDestination             // refund_issued (order-level total)
+//   refundCents, refundDestination,            // refund_issued (order-level total)
+//   refundTiming,                              // e.g. "3–5 business days" stated in the email
+//   warnings: ['...']                          // parser wasn't fully sure -> shown for review
 // }
 
 import { EMAIL_KIND_STAGE, advanceStage, stageRank } from '../lib/stages.js';
@@ -135,6 +137,7 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
       }
     }
 
+    if (parsed.warnings?.length) problems.push(...parsed.warnings);
     if (parsed.kind === 'refund_issued' && targets.length > 1 && targets.some((t) => t.emailItem.refundCents == null)) {
       problems.push('Refund amount could not be split between items — please check each item\'s issued amount');
     }
@@ -206,6 +209,9 @@ function applyEffects(db, { row, emailItem: ei, created }, parsed, { emailId, ev
     // Per-item amount if the email lists one; otherwise the order-level total
     // only when this email clearly concerns a single item.
     const amount = ei.refundCents ?? (singleTarget ? parsed.refundCents : null);
+    if (parsed.refundTiming) {
+      db.prepare('UPDATE refunds SET timing_json = ? WHERE item_id = ?').run(JSON.stringify({ ...parsed.refundTiming, source: 'email' }), id);
+    }
     recordRefundIssued(db, id, { amountCents: amount ?? 0, date: eventDate, destination: parsed.refundDestination, emailId });
   }
 

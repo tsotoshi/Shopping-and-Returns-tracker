@@ -2,7 +2,7 @@
 
 A personal, phone-friendly app that tracks purchases and returns, and follows every refund until **you** confirm the money reached your account.
 
-> **Current status: Stage 1 of 4.** The interface and all the core logic work, but only with clearly labeled **sample data**. Gmail import, AI policy review, and notifications haven't been built yet, and the app says so wherever they'd appear.
+> **Current status: Stage 2 of 4.** Real Gmail import (read-only) for Amazon works. AI policy review and notifications aren't built yet, so return deadlines for imported items show "Needs review" until you enter one or Stage 3 lands. Sample data is still available and always labeled.
 
 ## Run it
 
@@ -14,17 +14,32 @@ npm start            # http://localhost:3000
 npm test             # run the automated tests
 ```
 
-Then open Settings → **Load sample data**. To use it on your phone, have the phone on the same Wi-Fi and visit `http://<your-computer's-IP>:3000`.
+Then open Settings → **Load sample data** to explore, or connect Gmail (below).
 
-Optional: `cp .env.example .env` to change the port or database location. `.env` is git-ignored.
+## Connect Gmail
+
+1. In Google Cloud, enable the Gmail API, set up the consent screen (External, Testing, yourself as a test user, scope `gmail.readonly`), and create a **Web application** OAuth client with redirect URI `http://localhost:3000/auth/google/callback`.
+2. `cp .env.example .env` and fill in `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI`. `.env` is git-ignored.
+3. `npm start`, open **http://localhost:3000** on the same computer, go to Settings → **Connect Gmail**, approve, then tap **Sync emails**.
+
+Things to know:
+- **Read-only.** The app asks only for `gmail.readonly` and refuses to connect if Google grants anything broader.
+- **Weekly reconnect.** While your Google app is in Testing mode, Google expires access after about 7 days. The app shows a **Reconnect** button when that happens.
+- **First sync** looks back 180 days. Later syncs only look at recent mail, and emails already imported are never downloaded twice.
+- **Spoof protection.** Only mail from real `amazon.com` addresses is used, and return label/QR links are only kept if they point to `amazon.com`.
+- **Parser limits.** Amazon doesn't publish its email formats. Anything the parser can't read confidently goes to "Emails that need a look", with a link to open it in Gmail.
+
+## Use it from your phone
+
+By default the app only accepts connections from the computer it runs on. To open it from your phone on the same Wi-Fi, set `APP_PASSWORD=something-long` in `.env` and restart. Then visit `http://<your-computer's-IP>:3000` and log in with any username and that password. Connect Gmail from the computer itself (Google only redirects back to `localhost`); after that, syncing works from the phone.
 
 ## Stages
 
 | Stage | Contents | Status |
 |---|---|---|
-| 1 | Data model, the nine item stages, deadline and refund math, email-matching pipeline, dashboard, item page, tests | ✅ Done (sample data) |
-| 2 | Gmail OAuth (read-only), Amazon email parser, "Sync emails" | Next |
-| 3 | AI return-policy review, policy links you supply, accept or reject suggestions | Planned |
+| 1 | Data model, the nine item stages, deadline and refund math, email-matching pipeline, dashboard, item page, tests | ✅ Done |
+| 2 | Gmail OAuth (read-only), Amazon email parser, "Sync emails", optional app password | ✅ Done |
+| 3 | AI return-policy review, policy links you supply, accept or reject suggestions | Next |
 | 4 | Background sync, push or email notifications, more retailers | Planned |
 
 ## How it's organized
@@ -41,7 +56,14 @@ src/
     ingest.js       ONE parsed email → orders/items/events (duplicate-safe)
     items.js        every user action & email effect on items/refunds/policies
     queries.js      dashboard, list, detail
-  retailers/        retailer registry (parsers plug in here in Stage 2)
+  gmail/
+    oauth.js        Google sign-in (read-only scope, scope check)
+    account.js      stores/refreshes the token in the local database
+    client.js       read-only Gmail API calls + email decoding
+  retailers/
+    index.js        registry: Gmail search + parser per retailer
+    amazon.js       Amazon email parser
+  services/sync.js  "Sync emails": fetch → skip seen → parse → import
   sample/           labeled sample data, imported through the real pipeline
   db.js           SQLite schema
   app.js          JSON API + serves public/
@@ -60,4 +82,7 @@ test/             node:test tests
 
 ## Your data
 
-Everything lives in `data/tracker.sqlite` on the machine running the app. In Stage 1, **no data leaves the app**. What later stages will send, and to whom, is documented in Settings → Your data and will be expanded when those stages are built.
+Everything, including your Gmail token, lives in `data/tracker.sqlite` on the machine running the app. Nothing is stored in the browser or in git.
+
+- **Gmail → app:** only emails matching the Amazon search. The app keeps the extracted details (order number, items, prices, dates, links) and the subject, not full email bodies.
+- **App → anywhere else:** nothing yet. Stage 3 will send the store, item name, seller, dates and policy page text to the AI provider, and will be documented when built.

@@ -193,7 +193,7 @@ export function recomputeRefundWindow(db, itemId) {
   const policy = item.policy_json ? JSON.parse(item.policy_json) : null;
   const settings = getSettings(db);
   const w = computePostingWindow({
-    timing: policy?.refundTiming ?? null,
+    timing: refund.timing_json ? JSON.parse(refund.timing_json) : policy?.refundTiming ?? null,
     events: { refund_issued: refund.issued_at, return_received: item.return_received_at, dropped_off: item.dropped_off_at },
     fallbackDays: settings.refundReminderDays,
   });

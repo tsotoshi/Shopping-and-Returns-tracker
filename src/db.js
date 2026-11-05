@@ -133,6 +133,39 @@ CREATE TABLE IF NOT EXISTS settings (
   value TEXT NOT NULL
 );
 
+-- Stage 2: Gmail connection (one account). Tokens live only here, on your computer.
+CREATE TABLE IF NOT EXISTS gmail_account (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  email TEXT,
+  refresh_token TEXT NOT NULL,
+  access_token TEXT,
+  access_expires_at INTEGER,               -- ms since epoch
+  scope TEXT,
+  connected_at TEXT NOT NULL DEFAULT (datetime('now')),
+  needs_reconnect INTEGER NOT NULL DEFAULT 0,
+  last_sync_at TEXT
+);
+
+-- Emails we looked at and deliberately ignored (ads, cancellations, ...),
+-- so the next sync doesn't download them again.
+CREATE TABLE IF NOT EXISTS skipped_messages (
+  provider TEXT NOT NULL,
+  message_id TEXT NOT NULL,
+  reason TEXT,
+  seen_at TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (provider, message_id)
+);
+
+CREATE TABLE IF NOT EXISTS sync_runs (
+  id INTEGER PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  finished_at TEXT,
+  status TEXT NOT NULL,                    -- running | ok | error
+  found INTEGER DEFAULT 0, imported INTEGER DEFAULT 0, already_had INTEGER DEFAULT 0,
+  needs_review INTEGER DEFAULT 0, ignored INTEGER DEFAULT 0, failed INTEGER DEFAULT 0,
+  message TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_items_order ON items(order_id);
 CREATE INDEX IF NOT EXISTS idx_events_item ON events(item_id);
 `;
@@ -150,9 +183,21 @@ export function openDb(file = process.env.DB_PATH || './data/tracker.sqlite') {
   db.pragma('journal_mode = WAL');
   db.pragma('foreign_keys = ON');
   db.exec(SCHEMA);
+  migrate(db);
   const ins = db.prepare('INSERT OR IGNORE INTO settings (key, value) VALUES (?, ?)');
   for (const [k, v] of Object.entries(DEFAULT_SETTINGS)) ins.run(k, v);
   return db;
+}
+
+// Columns added after Stage 1. Adding them here upgrades an existing
+// database file in place without losing data.
+function ensureColumn(db, table, column, type) {
+  const cols = db.prepare(`PRAGMA table_info(${table})`).all().map((c) => c.name);
+  if (!cols.includes(column)) db.exec(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+}
+
+function migrate(db) {
+  ensureColumn(db, 'refunds', 'timing_json', 'TEXT'); // refund timing stated in a refund email
 }
 
 export function getSettings(db) {

@@ -129,14 +129,46 @@ function wireRefundActions(root, reload) {
   }));
 }
 
+// ---------- Gmail ----------
+function syncSummary(r) {
+  const parts = [`${r.imported} new`, `${r.already_had} already imported`];
+  if (r.ignored) parts.push(`${r.ignored} not order-related`);
+  if (r.needs_review) parts.push(`${r.needs_review} need a look`);
+  if (r.failed) parts.push(`${r.failed} failed`);
+  return parts.join(' · ');
+}
+
+function gmailNotice(g, hasSample) {
+  if (!g.configured) return `<div class="notice">Gmail isn't set up yet — see <a href="#/settings">Settings</a>. ${hasSample ? 'Items marked "Sample" are made-up data.' : ''}</div>`;
+  if (g.needsReconnect) return '<div class="notice warn">Gmail access expired — <a href="#/settings">reconnect in Settings</a>. (Google requires this about weekly while the app is in Testing mode.)</div>';
+  if (!g.connected) return '<div class="notice"><a href="#/settings">Connect Gmail</a> to import your Amazon orders automatically.</div>';
+  const last = g.lastRun;
+  return `<p class="small muted">Gmail: ${esc(g.email)} · ${last ? `last synced ${new Date(last.finished_at || last.started_at).toLocaleString()}${last.status === 'error' ? ' (failed)' : ''}` : 'not synced yet — tap Sync emails'}</p>`;
+}
+
+async function runSync(btn, after) {
+  btn.disabled = true;
+  btn.textContent = 'Syncing…';
+  try {
+    const r = await api('/sync', {});
+    toast(`Sync done: ${syncSummary(r)}`);
+  } catch (e) {
+    toast(e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Sync emails';
+    after();
+  }
+}
+
 // ---------- pages ----------
 async function renderHome() {
   const [d, status] = await Promise.all([api('/dashboard'), api('/status')]);
   const t = d.today;
   app.innerHTML = `
     <div class="row" style="margin-top:4px"><h1>Overview</h1>
-      <button class="btn" id="sync" title="${esc(status.gmail.note)}">Sync emails</button></div>
-    ${status.gmail.connected ? '' : `<div class="notice">Gmail isn't connected yet — real email import is built in Stage 2. ${d.hasSampleData ? 'Everything below is sample data.' : '<a href="#/settings">Load sample data</a> to try the app.'}</div>`}
+      <button class="btn" id="sync">${status.gmail.syncing ? 'Syncing…' : 'Sync emails'}</button></div>
+    ${gmailNotice(status.gmail, d.hasSampleData)}
 
     <div class="card stat"><div class="muted small">Total outstanding expected refunds</div>
       <div class="num">${money(d.totalOutstandingCents)}</div>
@@ -158,9 +190,7 @@ async function renderHome() {
     ${d.deadlinesUnknown.length ? section('Deadline needs review', d.deadlinesUnknown, (i) => itemCard(i, `${statusBadge(i.return_deadline_status)} We couldn't determine the return deadline.`), '') : ''}
     ${d.emailsNeedingReview.length ? section('Emails that need a look', d.emailsNeedingReview, (e) => `<div class="card"><div class="title">${esc(e.subject)}${sampleBadge(e)}</div><div class="small muted">${esc(e.review_reason)}</div>${e.web_link ? `<a class="small" href="${esc(e.web_link)}" target="_blank" rel="noopener">Open in Gmail</a>` : ''}</div>`, '') : ''}
   `;
-  document.getElementById('sync').addEventListener('click', async () => {
-    try { await api('/sync', {}); } catch (e) { toast(e.message); }
-  });
+  document.getElementById('sync').addEventListener('click', (e) => runSync(e.target, renderHome));
   wireRefundActions(app, renderHome);
 }
 
@@ -314,14 +344,39 @@ async function renderItem(id) {
   wireRefundActions(app, reload);
 }
 
+function gmailCard(g) {
+  const onThisComputer = ['localhost', '127.0.0.1'].includes(location.hostname);
+  const connectBtn = (label) => onThisComputer
+    ? `<a class="btn primary block" href="/auth/google/start" style="display:block;text-align:center;text-decoration:none">${label}</a>`
+    : '<div class="notice">Connect Gmail from the computer running the app (Google only allows sign-in to return to localhost). After that, syncing works from your phone too.</div>';
+  if (!g.configured) {
+    return `<p class="small">Gmail isn't set up yet. Add <code>GOOGLE_CLIENT_ID</code>, <code>GOOGLE_CLIENT_SECRET</code> and <code>GOOGLE_REDIRECT_URI</code> to the <code>.env</code> file, then restart the app.</p>`;
+  }
+  if (!g.email) {
+    return `<p class="small">The app will ask Google for <strong>read-only</strong> access. It can't send, change, archive, or delete email, and it only looks at Amazon order, shipping, return, and refund emails.</p>${connectBtn('Connect Gmail')}`;
+  }
+  const r = g.lastRun;
+  return `<dl class="kv">
+      <dt>Account</dt><dd>${esc(g.email)} ${g.needsReconnect ? '<span class="badge warn">Needs reconnect</span>' : '<span class="badge ok">Connected · read-only</span>'}</dd>
+      <dt>Last sync</dt><dd>${r ? `${new Date(r.finished_at || r.started_at).toLocaleString()} — ${r.status === 'ok' ? esc(syncSummary(r)) : r.status === 'running' ? 'running…' : `failed: ${esc(r.message)}`}` : 'Never'}</dd>
+    </dl>
+    ${g.needsReconnect ? `<div style="margin-top:10px">${connectBtn('Reconnect Gmail')}</div>` : `<div class="actions"><button class="btn primary" id="sync-now">Sync emails now</button></div>`}
+    <div class="actions"><button class="btn danger" id="disconnect">Disconnect Gmail</button></div>
+    <p class="small muted">Disconnecting deletes the app's Gmail token and asks Google to cancel access. Imported purchases stay.</p>`;
+}
+
 async function renderSettings() {
   const [s, status, d] = await Promise.all([api('/settings'), api('/status'), api('/dashboard')]);
+  const gmailMsg = new URLSearchParams(location.hash.split('?')[1] ?? '').get('gmail');
   app.innerHTML = `
     <h1>Settings</h1>
 
+    ${gmailMsg ? `<div class="notice ${gmailMsg === 'connected' ? '' : 'warn'}">${gmailMsg === 'connected' ? 'Gmail connected (read-only). Tap Sync emails to import.' : esc(gmailMsg)}</div>` : ''}
+    <h2>Gmail</h2>
+    <div class="card">${gmailCard(status.gmail)}</div>
+
     <h2>Connections</h2>
     <div class="card"><dl class="kv">
-      <dt>Gmail</dt><dd>${status.gmail.connected ? '<span class="badge ok">Connected</span>' : `<span class="badge">Not connected</span> <span class="small muted">${esc(status.gmail.note)}</span>`}</dd>
       <dt>AI review</dt><dd>${status.ai.configured ? '<span class="badge ok">Configured</span>' : `<span class="badge">Not set up</span> <span class="small muted">${esc(status.ai.note)}</span>`}</dd>
       <dt>Retailers</dt><dd>${status.retailers.map((r) => `${esc(r.name)} ${r.parserReady ? '' : '<span class="small muted">(email parser in Stage 2)</span>'}`).join(', ')}</dd>
     </dl></div>
@@ -348,10 +403,19 @@ async function renderSettings() {
 
     <h2>Your data</h2>
     <div class="card small">
-      <p style="margin-top:0">Everything is stored in a database file on the computer running this app. Right now, <strong>no data leaves the app</strong>.</p>
-      <p>Later stages: Gmail is read with <em>read-only</em> permission (the app can't change, archive, or delete email). For AI policy review, only the store, item name, seller, dates, and the policy page text are sent to the AI provider — not your full emails or payment details.</p>
+      <p style="margin-top:0">Everything is stored in a database file on the computer running this app. Your Gmail token is stored there too — never in the browser or in git.</p>
+      <p><strong>Gmail → app:</strong> the app downloads only emails matching Amazon order/shipping/return/refund searches, keeps just the extracted details (order number, items, prices, dates, links) plus the subject, and does not save full email bodies.</p>
+      <p><strong>App → anywhere else:</strong> nothing yet. In Stage 3, only the store, item name, seller, dates, and policy page text will be sent to the AI provider — not your full emails or payment details.</p>
     </div>
   `;
+  document.getElementById('sync-now')?.addEventListener('click', (e) => runSync(e.target, renderSettings));
+  document.getElementById('disconnect')?.addEventListener('click', async () => {
+    if (!confirm('Disconnect Gmail? Your imported purchases will stay.')) return;
+    await api('/gmail/disconnect', {});
+    toast('Gmail disconnected');
+    history.replaceState(null, '', '#/settings');
+    renderSettings();
+  });
   document.getElementById('load').onclick = async () => { await api('/sample/load', {}); toast('Sample data loaded'); renderSettings(); refreshBanner(); };
   document.getElementById('clear').onclick = async () => { await api('/sample/clear', {}); toast('Sample data removed'); renderSettings(); refreshBanner(); };
   document.getElementById('settings').onsubmit = async (e) => {

@@ -25,12 +25,16 @@ export function computePostingWindow({ timing, events = {}, fallbackDays = 10 })
     const add = timing.unit === 'business' ? addBusinessDays : addDays;
     const unitWord = timing.unit === 'business' ? 'business days' : 'calendar days';
     const min = timing.minDays ?? timing.maxDays;
+    const who = timing.source === 'email' ? 'Stated in the refund email' : 'Retailer timing';
+    const assumptions = [];
+    if (timing.unitAssumed) assumptions.push("The source didn't say business or calendar days, so we assumed business days (the later, safer date).");
+    if (timing.unit === 'business') assumptions.push(HOLIDAY_ASSUMPTION);
     return {
       kind: 'retailer',
       start: add(start, min),
       end: add(start, timing.maxDays),
-      basis: `Retailer timing: ${min === timing.maxDays ? min : `${min}–${timing.maxDays}`} ${unitWord} after the ${EVENT_LABEL[timing.startEvent]} (${start}).`,
-      assumption: timing.unit === 'business' ? HOLIDAY_ASSUMPTION : null,
+      basis: `${who}: ${min === timing.maxDays ? min : `${min}–${timing.maxDays}`} ${unitWord} after the ${EVENT_LABEL[timing.startEvent]} (${start}).`,
+      assumption: assumptions.join(' ') || null,
     };
   }
 
