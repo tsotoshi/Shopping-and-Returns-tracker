@@ -1,0 +1,28 @@
+{
+  "name": "shopping-returns-tracker",
+  "version": "0.1.0",
+  "description": "Personal shopping & returns tracker",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --watch --env-file-if-exists=.env src/server.js",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tsotoshi/Shopping-and-Returns-tracker.git"
+  },
+  "bugs": {
+    "url": "https://github.com/tsotoshi/Shopping-and-Returns-tracker/issues"
+  },
+  "homepage": "https://github.com/tsotoshi/Shopping-and-Returns-tracker#readme",
+  "dependencies": {
+    "better-sqlite3": "^13.0.3",
+    "express": "^4.22.3"
+  },
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.9"
+  }
+}
