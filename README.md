@@ -2,7 +2,7 @@
 
 A personal, phone-friendly app that tracks purchases and returns, and follows every refund until **you** confirm the money reached your account.
 
-> **Current status: Stage 2 of 4.** Real Gmail import (read-only) for Amazon works. AI policy review and notifications aren't built yet, so return deadlines for imported items show "Needs review" until you enter one or Stage 3 lands. Sample data is still available and always labeled.
+> **Current status: Stage 3 of 4.** Real Gmail import (read-only) for Amazon and AI return-policy review work. Push/email notifications and background sync come in Stage 4. Sample data is still available and always labeled.
 
 ## Run it
 
@@ -29,6 +29,19 @@ Things to know:
 - **Spoof protection.** Only mail from real `amazon.com` addresses is used, and return label/QR links are only kept if they point to `amazon.com`.
 - **Parser limits.** Amazon doesn't publish its email formats. Anything the parser can't read confidently goes to "Emails that need a look", with a link to open it in Gmail.
 
+## Turn on AI policy review
+
+1. Create an API key at **console.anthropic.com** (Settings → API keys) and add billing credit.
+2. Add `ANTHROPIC_API_KEY=...` to `.env` and restart.
+3. Tap **Review now** on the dashboard, or **Review policy with AI** on an item.
+
+How it stays honest:
+- The AI may only read pages on the retailer's own site (plus a policy link you add). The API's domain filter enforces this.
+- Every rule must come with an exact quote, and the app checks each quote against the page the AI actually fetched. Rules that can't be verified are dropped and the item is flagged **Needs review**.
+- The app, not the AI, computes the dates from the verified rules. Third-party sellers are never marked better than **Estimated**.
+- If you've corrected an item's deadline, new AI results become suggestions you can accept or reject.
+- Reviews only run when you tap a button, and each one uses a little of your Anthropic credit. Sample items are never sent.
+
 ## Use it from your phone
 
 By default the app only accepts connections from the computer it runs on. To open it from your phone on the same Wi-Fi, set `APP_PASSWORD=something-long` in `.env` and restart. Then visit `http://<your-computer's-IP>:3000` and log in with any username and that password. Connect Gmail from the computer itself (Google only redirects back to `localhost`); after that, syncing works from the phone.
@@ -39,8 +52,8 @@ By default the app only accepts connections from the computer it runs on. To ope
 |---|---|---|
 | 1 | Data model, the nine item stages, deadline and refund math, email-matching pipeline, dashboard, item page, tests | ✅ Done |
 | 2 | Gmail OAuth (read-only), Amazon email parser, "Sync emails", optional app password | ✅ Done |
-| 3 | AI return-policy review, policy links you supply, accept or reject suggestions | Next |
-| 4 | Background sync, push or email notifications, more retailers | Planned |
+| 3 | AI return-policy review with verified quotes, policy links you supply, accept or reject suggestions | ✅ Done |
+| 4 | Background sync, push or email notifications, more retailers | Next |
 
 ## How it's organized
 
@@ -64,6 +77,8 @@ src/
     index.js        registry: Gmail search + parser per retailer
     amazon.js       Amazon email parser
   services/sync.js  "Sync emails": fetch → skip seen → parse → import
+  ai/policyReview.js  what's sent to the AI, its rules, and quote verification
+  services/policyReviews.js  batches items, saves verified results
   sample/           labeled sample data, imported through the real pipeline
   db.js           SQLite schema
   app.js          JSON API + serves public/
@@ -85,4 +100,4 @@ test/             node:test tests
 Everything, including your Gmail token, lives in `data/tracker.sqlite` on the machine running the app. Nothing is stored in the browser or in git.
 
 - **Gmail → app:** only emails matching the Amazon search. The app keeps the extracted details (order number, items, prices, dates, links) and the subject, not full email bodies.
-- **App → anywhere else:** nothing yet. Stage 3 will send the store, item name, seller, dates and policy page text to the AI provider, and will be documented when built.
+- **App → Anthropic (only when you tap a review button):** the store name, each item's name and seller, its order, delivery and return dates, and any policy link you added. *Not* sent: prices, order numbers, payment methods, your email address or any email text.

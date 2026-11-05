@@ -17,6 +17,7 @@
   },
   "homepage": "https://github.com/tsotoshi/Shopping-and-Returns-tracker#readme",
   "dependencies": {
+    "@anthropic-ai/sdk": "^1.5.0",
     "better-sqlite3": "^13.0.3",
     "express": "^4.22.3"
   },

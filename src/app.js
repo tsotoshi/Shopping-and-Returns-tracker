@@ -16,6 +16,18 @@ import { googleConfig, buildAuthUrl, exchangeCode } from './gmail/oauth.js';
 import { getAccount, saveAccount, disconnect, tokenProvider } from './gmail/account.js';
 import { createGmailClient } from './gmail/client.js';
 import { syncGmail, lastSyncRun, isSyncing } from './services/sync.js';
+import Anthropic from '@anthropic-ai/sdk';
+import { reviewPolicies, itemsNeedingReview, isReviewing, setPolicyLink } from './services/policyReviews.js';
+
+// Turn AI API errors into plain-English messages (typed classes, not string matching).
+function aiErrorMessage(e) {
+  if (e instanceof Anthropic.AuthenticationError) return 'Your Anthropic API key was rejected — check ANTHROPIC_API_KEY in .env.';
+  if (e instanceof Anthropic.PermissionDeniedError) return 'Your Anthropic account doesn\'t have access to this model or tool.';
+  if (e instanceof Anthropic.RateLimitError) return 'The AI service is busy or your usage limit was reached — try again in a few minutes.';
+  if (e instanceof Anthropic.APIConnectionError) return 'Couldn\'t reach the AI service — check your internet connection.';
+  if (e instanceof Anthropic.APIError) return `The AI service returned an error (${e.status ?? 'unknown'}).`;
+  return e.message;
+}
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const toCents = (v) => (v === '' || v == null ? undefined : Math.round(Number(v) * 100));
@@ -38,6 +50,9 @@ export function createApp(db, {
   appPassword = process.env.APP_PASSWORD || '',
   fetchImpl = fetch,
   makeGmailClient = () => createGmailClient({ getAccessToken: tokenProvider(db, google, fetchImpl), fetchImpl }),
+  aiConfigured = !!process.env.ANTHROPIC_API_KEY,
+  // The SDK reads ANTHROPIC_API_KEY from the environment; the key never reaches the browser.
+  makeAiClient = () => new Anthropic(),
 } = {}) {
   const app = express();
   if (appPassword) app.use(passwordGate(appPassword));
@@ -96,7 +111,7 @@ export function createApp(db, {
       lastRun: lastSyncRun(db),
       syncing: isSyncing(),
     },
-    ai: { configured: false, stage: 3, note: 'AI policy review arrives in Stage 3.' },
+    ai: { configured: aiConfigured, reviewing: isReviewing(), pending: itemsNeedingReview(db).length },
     retailers: Object.values(RETAILERS).map((r) => ({ id: r.id, name: r.name, parserReady: !!r.parse })),
     today: today(),
     };
@@ -136,6 +151,24 @@ export function createApp(db, {
       res.status(500).json({ error: `Sync failed: ${e.message}` });
     }
   });
+  const runReview = async (res, itemIds) => {
+    if (!aiConfigured) return res.status(400).json({ error: 'AI review isn\'t set up — add ANTHROPIC_API_KEY to .env and restart. See Settings.' });
+    try {
+      res.json(await reviewPolicies(db, { client: makeAiClient(), itemIds, today: today() }));
+    } catch (e) {
+      if (!(e instanceof Anthropic.APIError)) console.error('Policy review failed:', e);
+      res.status(e instanceof Anthropic.APIError ? 502 : 500).json({ error: aiErrorMessage(e) });
+    }
+  };
+  api.post('/policy/review', (req, res) => {
+    const ids = Array.isArray(req.body?.itemIds) ? req.body.itemIds.map(Number).filter(Number.isInteger) : undefined;
+    return runReview(res, ids);
+  });
+  api.post('/items/:id/policy-link', (req, res) => {
+    try { setPolicyLink(db, id(req), String(req.body?.url ?? '')); } catch (e) { return res.status(400).json({ error: e.message }); }
+    return runReview(res, [id(req)]);
+  });
+
   api.post('/gmail/disconnect', async (req, res) => {
     await disconnect(db, fetchImpl);
     res.json({ ok: true });

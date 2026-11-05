@@ -5,7 +5,7 @@ import { createApp } from '../src/app.js';
 
 async function withServer(fn) {
   const db = openDb(':memory:');
-  const server = createApp(db, { today: () => '2026-11-05', google: { configured: false } }).listen(0);
+  const server = createApp(db, { today: () => '2026-11-05', google: { configured: false }, aiConfigured: false }).listen(0);
   const base = `http://127.0.0.1:${server.address().port}/api`;
   const call = async (path, body) => {
     const res = await fetch(base + path, body === undefined ? {} : { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
@@ -51,4 +51,11 @@ test('refund actions via API and validation errors', () => withServer(async (cal
   const r = await call(`/items/${grinder.id}/refund/received`, { amount: '60.00' });
   assert.equal(r.body.refund.status, 'partial');
   assert.equal((await call('/settings', { snoozeDays: 0 })).status, 400);
+}));
+
+test('policy review explains when AI is not set up', () => withServer(async (call) => {
+  const r = await call('/policy/review', {});
+  assert.equal(r.status, 400);
+  assert.match(r.body.error, /ANTHROPIC_API_KEY/);
+  assert.equal((await call('/status')).body.ai.configured, false);
 }));

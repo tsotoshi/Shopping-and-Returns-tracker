@@ -161,6 +161,27 @@ async function runSync(btn, after) {
   }
 }
 
+// ---------- AI policy review ----------
+function reviewSummary(r) {
+  if (!r.reviewed) return 'Nothing needed a review.';
+  const parts = [];
+  if (r.confirmed) parts.push(`${r.confirmed} confirmed`);
+  if (r.estimated) parts.push(`${r.estimated} estimated`);
+  if (r.needsReview) parts.push(`${r.needsReview} need your review`);
+  if (r.suggestions) parts.push(`${r.suggestions} saved as suggestions (you'd corrected them)`);
+  return `Policy review done: ${parts.join(' · ')}`;
+}
+
+async function runReview(btn, itemIds, after) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Reviewing… (can take a minute)';
+  try { toast(reviewSummary(await api('/policy/review', itemIds ? { itemIds } : {}))); } catch (e) { toast(e.message); }
+  btn.disabled = false;
+  btn.textContent = label;
+  after();
+}
+
 // ---------- pages ----------
 async function renderHome() {
   const [d, status] = await Promise.all([api('/dashboard'), api('/status')]);
@@ -169,6 +190,9 @@ async function renderHome() {
     <div class="row" style="margin-top:4px"><h1>Overview</h1>
       <button class="btn" id="sync">${status.gmail.syncing ? 'Syncing…' : 'Sync emails'}</button></div>
     ${gmailNotice(status.gmail, d.hasSampleData)}
+    ${status.ai.configured && status.ai.pending ? `<div class="card"><div class="title">${status.ai.pending === 1 ? '1 item needs' : `${status.ai.pending} items need`} a return-policy review</div>
+      <p class="small muted" style="margin:4px 0 0">The AI reads the retailer's official policy and finds the deadlines. Each review uses a little of your Anthropic credit.</p>
+      <div class="actions"><button class="btn primary" id="review-all">Review now</button></div></div>` : ''}
 
     <div class="card stat"><div class="muted small">Total outstanding expected refunds</div>
       <div class="num">${money(d.totalOutstandingCents)}</div>
@@ -191,6 +215,7 @@ async function renderHome() {
     ${d.emailsNeedingReview.length ? section('Emails that need a look', d.emailsNeedingReview, (e) => `<div class="card"><div class="title">${esc(e.subject)}${sampleBadge(e)}</div><div class="small muted">${esc(e.review_reason)}</div>${e.web_link ? `<a class="small" href="${esc(e.web_link)}" target="_blank" rel="noopener">Open in Gmail</a>` : ''}</div>`, '') : ''}
   `;
   document.getElementById('sync').addEventListener('click', (e) => runSync(e.target, renderHome));
+  document.getElementById('review-all')?.addEventListener('click', (e) => runReview(e.target, null, renderHome));
   wireRefundActions(app, renderHome);
 }
 
@@ -227,7 +252,8 @@ const SOURCE_LABEL = { email: 'From email', manual: 'Your update', system: 'Auto
 async function renderItem(id) {
   const d = await api(`/items/${id}`);
   const { item: i, refund: r, policy } = d;
-  const today = (await api('/status')).today;
+  const status = await api('/status');
+  const today = status.today;
   const returnFlow = ['need_to_return', 'return_started', 'dropped_off', 'return_received', 'refund_issued', 'refund_confirmed'].includes(i.stage);
 
   app.innerHTML = `
@@ -280,15 +306,26 @@ async function renderItem(id) {
 
     <h2>Return policy</h2>
     <div class="card">
-      ${policy ? `<p class="small">${esc(i.policy_explanation ?? '')}</p>
+      ${policy ? `<div class="row wrap" style="margin-bottom:6px">${{ ai: '<span class="badge info">AI-reviewed</span>', user: '<span class="badge">Set by you</span>', sample: '<span class="badge sample">Sample</span>' }[i.policy_origin] ?? ''} ${statusBadge(policy.confidence)}</div>
+        <p class="small">${esc(i.policy_explanation ?? '')}</p>
         <dl class="kv small">
-          <dt>Eligible</dt><dd>${{ eligible: 'Yes', not_eligible: 'No', unknown: 'Unknown' }[i.eligibility] ?? '—'}</dd>
+          <dt>Returnable</dt><dd>${{ eligible: 'Yes', not_eligible: 'No — excluded by policy', unknown: policy.windowDays != null ? 'Not stated (no exclusion quoted)' : 'Unknown' }[i.eligibility] ?? '—'}</dd>
           <dt>Window</dt><dd>${policy.windowDays != null ? `${policy.windowDays} days from ${policy.startsFrom}` : 'Unknown'}</dd>
+          ${policy.dropoffDays != null ? `<dt>Drop off within</dt><dd>${policy.dropoffDays} days of starting the return</dd>` : ''}
+          ${policy.holidayExtension ? `<dt>Holiday rule</dt><dd>Bought ${niceDate(policy.holidayExtension.purchasedFrom)}–${niceDate(policy.holidayExtension.purchasedTo)}: return by ${niceDate(policy.holidayExtension.returnBy)}</dd>` : ''}
           <dt>Refund timing</dt><dd>${policy.refundTiming ? `${policy.refundTiming.minDays}–${policy.refundTiming.maxDays} ${policy.refundTiming.unit} days after ${policy.refundTiming.startEvent.replace('_', ' ')}` : 'Unknown'}</dd>
           <dt>Source</dt><dd>${i.policy_url ? `<a href="${esc(i.policy_url)}" target="_blank" rel="noopener">Policy page</a>` : i.policy_origin === 'sample' ? 'Sample — no real source' : '—'}</dd>
           <dt>Checked</dt><dd>${i.policy_checked_at ? niceDate(i.policy_checked_at) : '—'}</dd>
-        </dl>` : '<p class="small muted">Not reviewed yet.</p>'}
-      <p class="small muted">AI policy review arrives in Stage 3.</p>
+        </dl>
+        ${policy.evidence && Object.keys(policy.evidence).length ? `<details><summary class="small">What the policy page says</summary>${Object.values(policy.evidence).map((q) => `<blockquote class="small quote">“${esc(q)}”</blockquote>`).join('')}<p class="small muted">Each quote was checked against the page the AI read.</p></details>` : ''}` : '<p class="small muted">Not reviewed yet.</p>'}
+      ${i.is_sample ? '<p class="small muted">Sample items are never sent to the AI.</p>' : status.ai.configured ? `
+        <div class="actions"><button class="btn" id="review">${policy && i.policy_origin !== 'sample' ? 'Re-check with AI' : 'Review policy with AI'}</button></div>
+        <details><summary class="small">Use a specific policy link</summary>
+          <form id="policy-link"><p class="small muted">Paste the retailer's official return-policy page if the AI couldn't find or read the right one. It will re-check using that page.</p>
+          <input name="url" type="url" inputmode="url" placeholder="https://…" value="${esc(i.policy_user_url ?? '')}" required>
+          <div class="actions"><button class="btn primary">Save link and re-check</button></div></form>
+        </details>` : '<p class="small muted">AI review isn\'t set up — see Settings.</p>'}
+      ${i.policy_user_url ? `<p class="small muted">Your policy link: <a href="${esc(i.policy_user_url)}" target="_blank" rel="noopener">${esc(new URL(i.policy_user_url).hostname)}</a></p>` : ''}
     </div>
 
     ${i.return_instructions || i.label_url || i.qr_url ? `<h2>Return instructions</h2><div class="card">
@@ -340,6 +377,15 @@ async function renderItem(id) {
   app.querySelector('#deadlines')?.addEventListener('submit', (e) => { e.preventDefault(); post(`/items/${id}/deadlines`, Object.fromEntries(new FormData(e.target)), 'Deadline saved — it won\'t be overwritten automatically'); });
   app.querySelector('#expected')?.addEventListener('submit', (e) => { e.preventDefault(); post(`/items/${id}/expected-refund`, Object.fromEntries(new FormData(e.target)), 'Expected amount saved'); });
   app.querySelector('#resolve')?.addEventListener('submit', (e) => { e.preventDefault(); post(`/items/${id}/refund/resolve`, Object.fromEntries(new FormData(e.target)), 'Refund closed'); });
+  const reviewBtn = app.querySelector('#review');
+  reviewBtn?.addEventListener('click', () => runReview(reviewBtn, [Number(id)], reload));
+  app.querySelector('#policy-link')?.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const btn = e.target.querySelector('button');
+    btn.disabled = true; btn.textContent = 'Checking…';
+    try { toast(reviewSummary(await api(`/items/${id}/policy-link`, Object.fromEntries(new FormData(e.target))))); } catch (err) { toast(err.message); }
+    reload();
+  });
   app.querySelectorAll('[data-sugg]').forEach((b) => b.addEventListener('click', () => post(`/suggestions/${b.dataset.sid}/${b.dataset.sugg}`, {}, b.dataset.sugg === 'accept' ? 'Suggestion applied' : 'Kept your version')));
   wireRefundActions(app, reload);
 }
@@ -377,7 +423,7 @@ async function renderSettings() {
 
     <h2>Connections</h2>
     <div class="card"><dl class="kv">
-      <dt>AI review</dt><dd>${status.ai.configured ? '<span class="badge ok">Configured</span>' : `<span class="badge">Not set up</span> <span class="small muted">${esc(status.ai.note)}</span>`}</dd>
+      <dt>AI review</dt><dd>${status.ai.configured ? `<span class="badge ok">Set up</span> <span class="small muted">${status.ai.pending} item${status.ai.pending === 1 ? '' : 's'} waiting for review</span>` : '<span class="badge">Not set up</span> <span class="small muted">Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> and restart.</span>'}</dd>
       <dt>Retailers</dt><dd>${status.retailers.map((r) => `${esc(r.name)} ${r.parserReady ? '' : '<span class="small muted">(email parser in Stage 2)</span>'}`).join(', ')}</dd>
     </dl></div>
 
@@ -405,7 +451,8 @@ async function renderSettings() {
     <div class="card small">
       <p style="margin-top:0">Everything is stored in a database file on the computer running this app. Your Gmail token is stored there too — never in the browser or in git.</p>
       <p><strong>Gmail → app:</strong> the app downloads only emails matching Amazon order/shipping/return/refund searches, keeps just the extracted details (order number, items, prices, dates, links) plus the subject, and does not save full email bodies.</p>
-      <p><strong>App → anywhere else:</strong> nothing yet. In Stage 3, only the store, item name, seller, dates, and policy page text will be sent to the AI provider — not your full emails or payment details.</p>
+      <p><strong>App → Anthropic (AI policy review, only when you tap a review button):</strong> the store name, each item's name, its seller, and its order, delivery, and return dates, plus any policy link you added. <em>Not</em> sent: prices, order numbers, payment methods, your email address, or any email text. The AI reads policy pages only on the retailer's own website (and links you add).</p>
+      <p>Sample items are never sent to the AI.</p>
     </div>
   `;
   document.getElementById('sync-now')?.addEventListener('click', (e) => runSync(e.target, renderSettings));

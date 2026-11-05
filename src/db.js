@@ -198,6 +198,7 @@ function ensureColumn(db, table, column, type) {
 
 function migrate(db) {
   ensureColumn(db, 'refunds', 'timing_json', 'TEXT'); // refund timing stated in a refund email
+  ensureColumn(db, 'items', 'policy_user_url', 'TEXT'); // a policy link you supplied (Stage 3)
 }
 
 export function getSettings(db) {
