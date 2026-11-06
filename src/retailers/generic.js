@@ -85,6 +85,7 @@ function structuredOrders(nodes) {
       out.push({
         orderNumber: String(n.orderNumber), merchantName: n.merchant?.name ?? n.seller?.name ?? null, orderDate: isoDate(n.orderDate),
         items: offerItems(n.acceptedOffer ?? n.orderedItem), kind: statusKind(n.orderStatus),
+        totalCents: n.price != null || n.totalPaymentDue?.price != null ? toCents(n.price ?? n.totalPaymentDue.price) : null,
         paymentMethod: n.paymentMethod?.name ?? null,
       });
     } else if (typeIs(n, 'ParcelDelivery') && n.partOfOrder?.orderNumber) {
@@ -141,8 +142,10 @@ export function parseGenericEmails(msg) {
     const items = o.items.map((it) => ({ ...it }));
     if (kind !== 'order_confirmation' && kind !== 'return_started') for (const it of items) delete it.quantity;
     if (kind === 'order_confirmation' && !items.length) warnings.push('No items could be read from this order email.');
+    const totalMatch = !multi && text.match(/(?:order|grand)\s+total\s*:?\s*\$\s?(\d{1,3}(?:,\d{3})*\.\d{2})/i);
     const parsed = {
       provider: 'gmail',
+      orderTotalCents: o.totalCents ?? (totalMatch ? toCents(totalMatch[1]) : null),
       messageId: multi ? `${msg.id}#${o.orderNumber}` : msg.id,
       threadId: msg.threadId,
       retailer: sender.domain,

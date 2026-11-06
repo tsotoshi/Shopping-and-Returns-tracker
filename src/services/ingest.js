@@ -75,12 +75,14 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
     // 2. Find or create the order (unique per retailer + order number).
     let order = null;
     if (parsed.orderNumber) {
-      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, payment_method, merchant_name, is_sample) VALUES (?, ?, ?, ?, ?, ?)
+      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, payment_method, merchant_name, order_total_cents, is_sample) VALUES (?, ?, ?, ?, ?, ?, ?)
                   ON CONFLICT (retailer, order_number) DO UPDATE SET
                     order_date = COALESCE(orders.order_date, excluded.order_date),
                     payment_method = COALESCE(orders.payment_method, excluded.payment_method),
-                    merchant_name = COALESCE(orders.merchant_name, excluded.merchant_name)`)
-        .run(parsed.retailer, parsed.orderNumber, parsed.orderDate ?? null, parsed.paymentMethod ?? null, parsed.merchantName ?? null, sample);
+                    merchant_name = COALESCE(orders.merchant_name, excluded.merchant_name),
+                    order_total_cents = COALESCE(orders.order_total_cents, excluded.order_total_cents)`)
+        .run(parsed.retailer, parsed.orderNumber, parsed.orderDate ?? null, parsed.paymentMethod ?? null, parsed.merchantName ?? null,
+          parsed.kind === 'order_confirmation' ? parsed.orderTotalCents ?? null : null, sample);
       order = db.prepare('SELECT * FROM orders WHERE retailer = ? AND order_number = ?').get(parsed.retailer, parsed.orderNumber);
     }
 

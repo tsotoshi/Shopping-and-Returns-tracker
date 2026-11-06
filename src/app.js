@@ -8,7 +8,7 @@ import { getSettings } from './db.js';
 import { updateSettings, SettingsError } from './settings.js';
 import { todayISO } from './lib/dates.js';
 import { STAGES } from './lib/stages.js';
-import { dashboard, listItems, itemDetail, stores } from './services/queries.js';
+import { dashboard, listItems, itemDetail, stores, purchases } from './services/queries.js';
 import * as items from './services/items.js';
 import { loadSampleData, clearSampleData } from './sample/sampleData.js';
 import { RETAILERS } from './retailers/index.js';
@@ -130,6 +130,7 @@ export function createApp(db, {
   }));
 
   api.get('/dashboard', wrap(() => dashboard(db, today())));
+  api.get('/purchases', wrap(() => ({ purchases: purchases(db) })));
   api.get('/items', wrap((req) => ({ items: listItems(db, req.query), stores: stores(db), stages: STAGES })));
   api.get('/items/:id', wrap((req, res) => {
     const d = itemDetail(db, id(req));

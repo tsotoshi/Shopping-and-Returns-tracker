@@ -268,6 +268,7 @@ function migrate(db) {
   ensureColumn(db, 'items', 'policy_user_url', 'TEXT'); // a policy link you supplied (Stage 3)
   ensureColumn(db, 'items', 'email_name', 'TEXT'); // the name as the retailer's emails say it (kept for matching if you rename)
   ensureColumn(db, 'orders', 'merchant_name', 'TEXT'); // display name for stores other than Amazon
+  ensureColumn(db, 'orders', 'order_total_cents', 'INTEGER'); // grand total as the email or order page states it
   ensureColumn(db, 'items', 'name_source', 'TEXT'); // 'email' | 'amazon_site' | 'you'
   db.exec(`CREATE TABLE IF NOT EXISTS ignored_stores (domain TEXT PRIMARY KEY, name TEXT, created_at TEXT NOT NULL DEFAULT (datetime('now')))`);
   ensureColumn(db, 'skipped_messages', 'subject', 'TEXT');

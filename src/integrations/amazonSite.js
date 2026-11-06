@@ -18,7 +18,7 @@ import { addEvent, applyPolicyResult, getItem, recomputeDeadlines } from '../ser
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CATEGORY_NOTE_RE = /Amazon's email only gave the category[^.]*\. Use Rename[^.]*\.\s*/;
-const TOTAL_NOTE_RE = /Price is the order's grand total[^.]*\.[^.]*\.\s*/;
+const TOTAL_NOTE_RE = /Price is the order's grand total[\s\S]*?item prices\.\s*/;
 
 export function amazonSiteConfig(env = process.env) {
   const venvPython = path.join(ROOT, '.venv', 'bin', 'python');
@@ -150,9 +150,10 @@ export function applyAmazonOrders(db, orders, { today = todayISO() } = {}) {
       if (!o.order_number || o.cancelled) continue;
       summary.orders++;
       const orderDate = isoDate(o.order_placed_date);
-      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, is_sample) VALUES ('amazon', ?, ?, 0)
-                  ON CONFLICT (retailer, order_number) DO UPDATE SET order_date = COALESCE(orders.order_date, excluded.order_date)`)
-        .run(o.order_number, orderDate);
+      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, order_total_cents, is_sample) VALUES ('amazon', ?, ?, ?, 0)
+                  ON CONFLICT (retailer, order_number) DO UPDATE SET order_date = COALESCE(orders.order_date, excluded.order_date),
+                    order_total_cents = COALESCE(excluded.order_total_cents, orders.order_total_cents)`)
+        .run(o.order_number, orderDate, cents(o.grand_total));
       const order = db.prepare("SELECT * FROM orders WHERE retailer = 'amazon' AND order_number = ?").get(o.order_number);
       const orderUrl = o.order_details_link ? new URL(o.order_details_link, 'https://www.amazon.com').toString() : null;
       const site = siteItemsOf(o);

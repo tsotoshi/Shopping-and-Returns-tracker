@@ -84,3 +84,27 @@ h3 { font-size: 16px; }
 details.card > summary { font-weight: 600; }
 .count[hidden] { display: none; }
 pre.cmd { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; overflow-x: auto; font-size: 13px; white-space: pre; }
+
+/* Purchases table: a real table on wide screens, stacked rows on phones */
+main { max-width: 1100px; }
+.ptable { width: 100%; border-collapse: collapse; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; }
+.ptable th, .ptable td { padding: 10px 12px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+.ptable th { font-size: 13px; color: var(--muted); background: var(--bg); white-space: nowrap; }
+.ptable .num { text-align: right; white-space: nowrap; }
+.ptable td.item a { font-weight: 600; text-decoration: none; color: var(--text); overflow-wrap: anywhere; }
+.ptable tbody tr:hover { background: var(--bg); }
+.ptable .flags { margin-top: 4px; display: flex; gap: 4px; flex-wrap: wrap; }
+button.sort { all: unset; cursor: pointer; font-weight: 600; }
+button.sort.on { color: var(--accent); }
+.mobile-only { display: none; }
+@media (max-width: 700px) {
+  .mobile-only { display: block; }
+  .ptable, .ptable tbody { display: block; width: 100%; background: none; border: 0; }
+  .ptable thead { display: none; }
+  /* One compact card per purchase: name + details on the left, amount on the right */
+  .ptable tr { display: grid; grid-template-columns: 1fr auto; gap: 2px 12px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); margin-bottom: 8px; padding: 10px 12px; }
+  .ptable td { display: none; border: 0; padding: 0; }
+  .ptable td.item { display: block; }
+  .ptable td[data-label="Amount"] { display: block; font-weight: 700; }
+}
+.ptable td.item a.elink { color: var(--accent); font-weight: 400; }

@@ -289,7 +289,7 @@ async function renderItem(id) {
   const returnFlow = ['need_to_return', 'return_started', 'dropped_off', 'return_received', 'refund_issued', 'refund_confirmed'].includes(i.stage);
 
   app.innerHTML = `
-    <p><a href="#/items">← Items</a></p>
+    <p><a href="#/">← Purchases</a></p>
     <h1>${esc(i.name)}</h1>
     ${i.email_name && i.email_name !== i.name ? `<p class="small muted" style="margin:0 0 6px">Amazon calls it: ${esc(i.email_name)}</p>` : ''}
     <details class="small"><summary>Rename</summary>
@@ -629,21 +629,151 @@ async function renderAlerts() {
   document.getElementById('read-all')?.addEventListener('click', async () => { await api('/notifications/all/read', {}); renderAlerts(); refreshBanner(); });
 }
 
+// ---------- Purchases (simple list for checking the data) ----------
+const purchaseView = { sort: 'date', dir: 'desc', q: '', merchant: '' };
+const SORTS = {
+  date: (r) => r.order_date ?? '',
+  merchant: (r) => (r.merchant ?? '').toLowerCase(),
+  item: (r) => (r.name ?? '').toLowerCase(),
+  amount: (r) => r.amount_cents ?? -1,
+  total: (r) => r.order_total_cents ?? -1,
+};
+
+function sortedPurchases(rows) {
+  const { sort, dir, q, merchant } = purchaseView;
+  const needle = q.trim().toLowerCase();
+  const out = rows.filter((r) => (!merchant || r.merchant === merchant)
+    && (!needle || `${r.name} ${r.email_name ?? ''} ${r.merchant} ${r.order_number}`.toLowerCase().includes(needle)));
+  const key = SORTS[sort];
+  out.sort((a, b) => {
+    const x = key(a);
+    const y = key(b);
+    const c = x < y ? -1 : x > y ? 1 : (b.order_date ?? '').localeCompare(a.order_date ?? '');
+    return dir === 'asc' ? c : -c;
+  });
+  return out;
+}
+
+function purchaseFlags(r) {
+  const f = [];
+  if (r.name_source === 'email_category') f.push('<span class="badge warn" title="The email only gave a category, not the product name">category only</span>');
+  if (r.amount_cents == null) f.push('<span class="badge" title="No price found">no price</span>');
+  else if (r.price_is_total) f.push('<span class="badge warn" title="This is the order\'s grand total, including tax">= order total</span>');
+  if (r.seller) f.push(`<span class="badge" title="Third-party seller">${esc(r.seller)}</span>`);
+  return f.join(' ');
+}
+
+function toCsv(rows) {
+  const cols = [
+    ['Order date', (r) => r.order_date], ['Merchant', (r) => r.merchant], ['Item', (r) => r.name], ['Name in email', (r) => r.email_name],
+    ['Qty', (r) => r.quantity], ['Amount', (r) => dollars(r.amount_cents)], ['Price is order total', (r) => (r.price_is_total ? 'yes' : '')],
+    ['Order total', (r) => dollars(r.order_total_cents)], ['Order #', (r) => r.order_number], ['Data source', (r) => r.source],
+    ['Seller', (r) => r.seller], ['Payment', (r) => r.payment_method], ['Delivered', (r) => r.delivered_date],
+    ['Expected delivery', (r) => r.estimated_delivery_date], ['Return by', (r) => r.return_deadline], ['Status', (r) => r.stage_label], ['Email link', (r) => r.email_link],
+  ];
+  const cell = (v) => {
+    const s = v == null ? '' : String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  return [cols.map((c) => c[0]).join(','), ...rows.map((r) => cols.map((c) => cell(c[1](r))).join(','))].join('\n');
+}
+
+async function renderPurchases() {
+  const { purchases } = await api('/purchases');
+  const status = await api('/status');
+  const merchants = [...new Set(purchases.map((r) => r.merchant))].sort((a, b) => a.localeCompare(b));
+
+  const draw = () => {
+    const rows = sortedPurchases(purchases);
+    const orders = new Set(rows.map((r) => `${r.retailer}|${r.order_number}`));
+    const totalCents = [...orders].reduce((sum, key) => {
+      const r = rows.find((x) => `${x.retailer}|${x.order_number}` === key);
+      return sum + (r.order_total_cents ?? 0);
+    }, 0);
+    const noPrice = rows.filter((r) => r.amount_cents == null).length;
+    const categoryOnly = rows.filter((r) => r.name_source === 'email_category').length;
+    const th = (key, label, cls = '') => `<th class="${cls}"><button class="sort ${purchaseView.sort === key ? 'on' : ''}" data-sort="${key}">${label}${purchaseView.sort === key ? (purchaseView.dir === 'asc' ? ' ▲' : ' ▼') : ''}</button></th>`;
+
+    app.innerHTML = `
+      <div class="row" style="margin-top:4px"><h1>Purchases</h1><button class="btn" id="sync">${status.gmail.syncing ? 'Syncing…' : 'Sync'}</button></div>
+      ${status.gmail.connected ? '' : '<div class="notice">Gmail isn\'t connected — <a href="#/settings">connect it in Settings</a> to import purchases.</div>'}
+      <div class="filters">
+        <input id="pq" type="search" placeholder="Search item, merchant, order #" value="${esc(purchaseView.q)}">
+        <select id="pm"><option value="">All merchants</option>${merchants.map((m) => `<option ${purchaseView.merchant === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
+        <select id="ps" class="mobile-only" aria-label="Sort">
+          ${[['date', 'Date'], ['merchant', 'Merchant'], ['amount', 'Amount'], ['item', 'Item'], ['total', 'Order total']].map(([k, l]) => ['desc', 'asc'].map((d) => `<option value="${k}:${d}" ${purchaseView.sort === k && purchaseView.dir === d ? 'selected' : ''}>Sort: ${l} ${d === 'asc' ? (k === 'date' ? '(oldest)' : k === 'amount' || k === 'total' ? '(low → high)' : '(A → Z)') : (k === 'date' ? '(newest)' : k === 'amount' || k === 'total' ? '(high → low)' : '(Z → A)')}</option>`).join('')).join('')}
+        </select>
+      </div>
+      <p class="small muted">${rows.length} item${rows.length === 1 ? '' : 's'} in ${orders.size} order${orders.size === 1 ? '' : 's'} · order totals ${money(totalCents)}
+        ${noPrice || categoryOnly ? `<br>Data checks: ${noPrice ? `${noPrice} without a price` : ''}${noPrice && categoryOnly ? ' · ' : ''}${categoryOnly ? `${categoryOnly} with category-only names` : ''}` : ''}</p>
+      ${rows.length ? `<table class="ptable">
+        <thead><tr>${th('date', 'Date')}${th('merchant', 'Merchant')}${th('item', 'Item')}<th class="num">Qty</th>${th('amount', 'Amount', 'num')}${th('total', 'Order total', 'num')}<th>Order #</th></tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr data-id="${r.id}">
+            <td data-label="Date">${niceDate(r.order_date)}</td>
+            <td data-label="Merchant">${esc(r.merchant)}</td>
+            <td data-label="Item" class="item"><a href="#/item/${r.id}">${esc(r.name)}</a>
+              <div class="small muted mobile-only">${esc(r.merchant)} · ${niceDate(r.order_date)}${(r.quantity ?? 1) > 1 ? ` · Qty ${r.quantity}` : ''}${r.order_total_cents != null ? ` · order ${money(r.order_total_cents)}` : ''}</div>
+              <div class="small muted">${esc(r.source)}${r.email_link ? ` · <a class="elink" href="${esc(r.email_link)}" target="_blank" rel="noopener">email</a>` : ''}</div>
+              ${purchaseFlags(r) ? `<div class="flags">${purchaseFlags(r)}</div>` : ''}</td>
+            <td data-label="Qty" class="num">${r.quantity ?? 1}</td>
+            <td data-label="Amount" class="num">${money(r.amount_cents)}</td>
+            <td data-label="Order total" class="num">${money(r.order_total_cents)}</td>
+            <td data-label="Order #" class="small">${esc(r.order_number)}</td>
+          </tr>`).join('')}</tbody>
+      </table>` : `<div class="empty">No purchases yet. ${status.gmail.connected ? 'Tap Sync to import from Gmail.' : ''}</div>`}
+      <div class="actions"><button class="btn" id="csv" ${rows.length ? '' : 'disabled'}>Download CSV (opens in Numbers or Excel)</button></div>
+      <p class="small muted" style="margin-top:16px"><a href="#/overview">Returns &amp; refunds dashboard</a> · <a href="#/alerts">Alerts</a></p>
+    `;
+
+    app.querySelectorAll('[data-sort]').forEach((b) => b.addEventListener('click', () => {
+      const k = b.dataset.sort;
+      if (purchaseView.sort === k) purchaseView.dir = purchaseView.dir === 'asc' ? 'desc' : 'asc';
+      else { purchaseView.sort = k; purchaseView.dir = k === 'merchant' || k === 'item' ? 'asc' : 'desc'; }
+      draw();
+    }));
+    const pq = app.querySelector('#pq');
+    pq.addEventListener('input', () => {
+      purchaseView.q = pq.value;
+      draw();
+      const again = app.querySelector('#pq');
+      again.focus();
+      again.setSelectionRange(again.value.length, again.value.length);
+    });
+    app.querySelector('#pm').addEventListener('change', (e) => { purchaseView.merchant = e.target.value; draw(); });
+    app.querySelector('#ps').addEventListener('change', (e) => { [purchaseView.sort, purchaseView.dir] = e.target.value.split(':'); draw(); });
+    app.querySelector('#sync').addEventListener('click', (e) => runSync(e.target, renderPurchases));
+    app.querySelector('#csv').addEventListener('click', () => {
+      const blob = new Blob([toCsv(rows)], { type: 'text/csv' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `purchases-${new Date().toISOString().slice(0, 10)}.csv`;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    });
+  };
+  draw();
+}
+
 // ---------- router ----------
 async function refreshBanner() {
   try {
     const d = await api('/dashboard');
     document.getElementById('sample-banner').hidden = !d.hasSampleData;
-    const n = await api('/notifications');
     const badge = document.getElementById('alert-count');
-    badge.textContent = n.unread > 9 ? '9+' : String(n.unread);
-    badge.hidden = !n.unread;
+    if (badge) {
+      const n = await api('/notifications');
+      badge.textContent = n.unread > 9 ? '9+' : String(n.unread);
+      badge.hidden = !n.unread;
+    }
   } catch { /* ignore */ }
 }
 
 async function route() {
   const hash = location.hash || '#/';
-  const tab = hash.startsWith('#/items') || hash.startsWith('#/item/') ? 'items' : hash.startsWith('#/settings') ? 'settings' : hash.startsWith('#/alerts') ? 'alerts' : 'home';
+  // Simple mode for now: Purchases is the main screen; the returns dashboard lives at #/overview.
+  const tab = hash.startsWith('#/items') ? 'items' : hash.startsWith('#/item/') ? 'purchases' : hash.startsWith('#/settings') ? 'settings'
+    : hash.startsWith('#/alerts') ? 'alerts' : hash.startsWith('#/overview') ? 'home' : 'purchases';
   document.querySelectorAll('.tabbar a').forEach((a) => a.classList.toggle('active', a.dataset.tab === tab));
   try {
     const m = hash.match(/^#\/item\/(\d+)/);
@@ -651,7 +781,8 @@ async function route() {
     else if (tab === 'items') await renderItems();
     else if (tab === 'settings') await renderSettings();
     else if (tab === 'alerts') await renderAlerts();
-    else await renderHome();
+    else if (tab === 'home') await renderHome();
+    else await renderPurchases();
   } catch (e) {
     app.innerHTML = `<div class="notice warn">${esc(e.message)}</div>`;
   }

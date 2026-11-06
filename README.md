@@ -16,6 +16,8 @@ npm test             # run the automated tests
 
 Then open Settings → **Load sample data** to explore, or connect Gmail (below).
 
+The main screen is **Purchases**: every item the app found, sortable by date, merchant or amount, with order totals, order numbers, where each detail came from, and a **Download CSV** button for checking against your real orders. The returns and refunds dashboard is still available from the link at the bottom of that screen.
+
 ## Connect Gmail
 
 1. In Google Cloud, enable the Gmail API, set up the consent screen (External, Testing, yourself as a test user, scope `gmail.readonly`), and create a **Web application** OAuth client with redirect URI `http://localhost:3000/auth/google/callback`.

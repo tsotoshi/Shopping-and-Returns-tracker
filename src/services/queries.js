@@ -35,6 +35,29 @@ export function stores(db) {
                      FROM orders GROUP BY retailer ORDER BY name`).all();
 }
 
+/**
+ * Every real purchase as one flat row, for the Purchases list (sorting and
+ * filtering happen in the browser). Sample data is left out.
+ */
+export function purchases(db) {
+  return db.prepare(`
+    SELECT i.id, i.name, i.email_name, i.name_source, i.quantity, i.unit_price_cents, i.notes, i.seller, i.stage,
+           i.delivered_date, i.estimated_delivery_date, i.return_deadline, i.return_deadline_status,
+           o.retailer, o.merchant_name, o.order_number, o.order_date, o.order_total_cents, o.payment_method,
+           (SELECT m.web_link FROM email_items ei JOIN emails m ON m.id = ei.email_id
+             WHERE ei.item_id = i.id AND m.web_link IS NOT NULL ORDER BY m.received_at LIMIT 1) AS email_link
+    FROM items i JOIN orders o ON o.id = i.order_id
+    WHERE i.is_sample = 0
+    ORDER BY o.order_date DESC, i.id`).all().map((r) => ({
+    ...r,
+    merchant: r.merchant_name || (r.retailer === 'amazon' ? 'Amazon' : r.retailer),
+    amount_cents: r.unit_price_cents == null ? null : r.unit_price_cents * (r.quantity ?? 1),
+    price_is_total: /grand total/i.test(r.notes ?? ''),
+    stage_label: stageLabel(r.stage),
+    source: r.name_source === 'amazon_site' ? 'Amazon order page' : r.name_source === 'email_category' ? 'Email (category only)' : r.name_source === 'you' ? 'Renamed by you' : 'Email',
+  }));
+}
+
 export function dashboard(db, today = todayISO()) {
   const s = getSettings(db);
   const items = listItems(db);
