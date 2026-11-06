@@ -80,3 +80,6 @@ label.check input { width: 22px; height: 22px; min-height: 0; flex: none; margin
 code.topic { display: block; padding: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow-wrap: anywhere; font-size: 14px; }
 ol.steps { padding-left: 20px; margin: 8px 0; }
 h3 { font-size: 16px; }
+.skip { padding: 8px 0; border-top: 1px solid var(--line); }
+details.card > summary { font-weight: 600; }
+.count[hidden] { display: none; }

@@ -22,8 +22,12 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
   const startedAt = new Date().toISOString();
   const runId = db.prepare("INSERT INTO sync_runs (started_at, status) VALUES (?, 'running')").run(startedAt).lastInsertRowid;
   const c = { found: 0, imported: 0, already_had: 0, needs_review: 0, ignored: 0, failed: 0 };
-  const seen = db.prepare("SELECT 1 FROM emails WHERE provider = 'gmail' AND message_id = ? UNION SELECT 1 FROM skipped_messages WHERE provider = 'gmail' AND message_id = ?");
-  const skip = db.prepare("INSERT OR IGNORE INTO skipped_messages (provider, message_id, reason) VALUES ('gmail', ?, ?)");
+  // Already imported (an email with several orders is stored as "<id>#<order>"), or
+  // skipped by the CURRENT parser version. Emails skipped by an older parser are re-checked.
+  const imported = db.prepare("SELECT 1 FROM emails WHERE provider = 'gmail' AND (message_id = @id OR message_id LIKE @prefix)");
+  const skippedNow = db.prepare("SELECT 1 FROM skipped_messages WHERE provider = 'gmail' AND message_id = @id AND parser_version = @v");
+  const skip = db.prepare(`INSERT OR REPLACE INTO skipped_messages (provider, message_id, reason, subject, from_addr, received_at, parser_version)
+                           VALUES ('gmail', @id, @reason, @subject, @from, @receivedAt, @v)`);
   const errors = [];
 
   try {
@@ -37,17 +41,30 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
       const q = `${r.gmailQuery} ${since ? `after:${since.replace(/-/g, '/')}` : `newer_than:${firstSyncDays}d`}`;
       const ids = (await client.listMessageIds(q, maxMessages)).reverse(); // oldest first: orders before deliveries
       c.found += ids.length;
+      const v = r.parserVersion ?? 1;
       for (const id of ids) {
-        if (seen.get(id, id)) { c.already_had++; continue; }
+        if (imported.get({ id, prefix: `${id}#%` }) || skippedNow.get({ id, v })) { c.already_had++; continue; }
         try {
           const msg = decodeMessage(await client.getMessage(id));
-          const parsed = r.parse(msg);
-          if (!parsed) { skip.run(id, 'not an order, shipping, return, or refund email'); c.ignored++; continue; }
-          parsed.webLink = gmailWebLink(id, account?.email);
-          const res = ingestParsedEmail(db, parsed);
-          if (res.status === 'duplicate') c.already_had++;
-          else if (res.status === 'imported') c.imported++;
-          else { c.imported += res.itemIds.length ? 1 : 0; c.needs_review++; }
+          const results = [].concat(r.parse(msg) ?? []);
+          if (!results.length) {
+            const reason = r.isFrom && !r.isFrom(msg.from) ? 'not from a verified retailer address' : 'not an order, shipping, return, or refund email';
+            skip.run({ id, reason, subject: msg.subject, from: msg.from, receivedAt: msg.receivedAt, v });
+            c.ignored++;
+            continue;
+          }
+          db.prepare("DELETE FROM skipped_messages WHERE provider = 'gmail' AND message_id = ?").run(id);
+          let anyNew = false;
+          let anyReview = false;
+          for (const parsed of results) {
+            parsed.webLink = gmailWebLink(id, account?.email);
+            const res = ingestParsedEmail(db, parsed);
+            if (res.status === 'imported') anyNew = true;
+            else if (res.status !== 'duplicate') { anyReview = true; if (res.itemIds.length) anyNew = true; }
+          }
+          if (anyNew) c.imported++;
+          if (anyReview) c.needs_review++;
+          if (!anyNew && !anyReview) c.already_had++;
         } catch (e) {
           if (e.reconnect || e.status === 401) throw e; // stop the whole sync
           c.failed++;

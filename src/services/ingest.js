@@ -103,7 +103,8 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
     if (parsed.items?.length) {
       for (const ei of parsed.items) {
         const all = orderItems();
-        const m = matchItem(all, ei);
+        // Match on the name the emails use, even if you renamed the item.
+        const m = matchItem(all.map((it) => ({ ...it, name: it.email_name || it.name })), ei);
         if (m.ambiguous) { problems.push(`"${ei.name}" matches more than one item`); continue; }
         if (m.match) {
           for (const row of pickRow(m.group, parsed.kind)) targets.push({ row, emailItem: ei });
@@ -111,9 +112,9 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
         }
         const groups = productGroups(all);
         if (parsed.kind === 'order_confirmation' || parsed.kind === 'shipped' || parsed.kind === 'delivered' || !all.length) {
-          const id = db.prepare(`INSERT INTO items (order_id, name, retailer_item_id, seller, quantity, unit_price_cents, is_sample)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?)`)
-            .run(order.id, ei.name, ei.retailerItemId ?? null, ei.seller ?? null, ei.quantity ?? 1, ei.unitPriceCents ?? null, sample).lastInsertRowid;
+          const id = db.prepare(`INSERT INTO items (order_id, name, email_name, retailer_item_id, seller, quantity, unit_price_cents, notes, is_sample)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(order.id, ei.name, ei.name, ei.retailerItemId ?? null, ei.seller ?? null, ei.quantity ?? 1, ei.unitPriceCents ?? null, ei.note ?? null, sample).lastInsertRowid;
           if (parsed.kind !== 'order_confirmation') addEvent(db, id, { kind: 'stage:purchased', occurredAt: order.order_date, source: 'system', detail: 'Item first seen in a later email (no order confirmation imported)' });
           targets.push({ row: getItem(db, id), emailItem: ei, created: true });
         } else if (groups.length === 1) {
@@ -173,7 +174,7 @@ function applyEffects(db, { row, emailItem: ei, created }, parsed, { emailId, ev
   if (item.unit_price_cents == null && ei.unitPriceCents != null) fill.unit_price_cents = ei.unitPriceCents;
   if (item.seller == null && ei.seller) fill.seller = ei.seller;
   if (item.retailer_item_id == null && ei.retailerItemId) fill.retailer_item_id = ei.retailerItemId;
-  if (kind === 'shipped' && parsed.estimatedDeliveryDate) fill.estimated_delivery_date = parsed.estimatedDeliveryDate;
+  if ((kind === 'shipped' || kind === 'order_confirmation') && parsed.estimatedDeliveryDate && !item.delivered_date) fill.estimated_delivery_date = parsed.estimatedDeliveryDate;
   if (kind === 'delivered') fill.delivered_date = parsed.deliveredDate ?? eventDate;
   if (kind === 'return_started') {
     fill.return_started_at = eventDate;
@@ -215,7 +216,7 @@ function applyEffects(db, { row, emailItem: ei, created }, parsed, { emailId, ev
     recordRefundIssued(db, id, { amountCents: amount ?? 0, date: eventDate, destination: parsed.refundDestination, emailId });
   }
 
-  if (['delivered', 'shipped', 'return_started'].includes(kind) || created) recomputeDeadlines(db, id);
+  if (['delivered', 'shipped', 'return_started', 'order_confirmation'].includes(kind) || created) recomputeDeadlines(db, id);
   recomputeRefundWindow(db, id);
   return id;
 }

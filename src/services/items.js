@@ -275,6 +275,16 @@ export function resolveRefund(db, itemId, { note }, today = todayISO()) {
   return getRefund(db, itemId);
 }
 
+/** Give an item your own name. The email's name is kept so later emails still match it. */
+export function renameItem(db, itemId, name, today = todayISO()) {
+  const item = mustItem(db, itemId);
+  const clean = String(name ?? '').trim().slice(0, 200);
+  if (!clean) throw new UserError('Please enter a name.');
+  update(db, 'items', itemId, { name: clean, email_name: item.email_name ?? item.name });
+  addEvent(db, itemId, { kind: 'renamed', occurredAt: today, source: 'manual', detail: `Renamed from "${item.name}" to "${clean}"` });
+  return getItem(db, itemId);
+}
+
 export function setExpectedRefund(db, itemId, expectedCents, today = todayISO()) {
   const refund = ensureRefund(db, itemId);
   update(db, 'refunds', refund.id, { expected_cents: expectedCents });

@@ -259,6 +259,11 @@ async function renderItem(id) {
   app.innerHTML = `
     <p><a href="#/items">← Items</a></p>
     <h1>${esc(i.name)}</h1>
+    ${i.email_name && i.email_name !== i.name ? `<p class="small muted" style="margin:0 0 6px">Amazon calls it: ${esc(i.email_name)}</p>` : ''}
+    <details class="small"><summary>Rename</summary>
+      <form id="rename" class="row"><input name="name" value="${esc(i.name)}" class="grow" aria-label="Item name" required><button class="btn">Save</button></form>
+    </details>
+    ${i.notes ? `<div class="notice">${esc(i.notes)}</div>` : ''}
     <div class="row wrap">${stageBadge(i)}${sampleBadge(i)}${i.quantity > 1 ? `<span class="badge">Qty ${i.quantity}</span>` : ''}${i.split_from_item_id ? '<span class="badge">Partial return line</span>' : ''}</div>
 
     <div class="card" style="margin-top:12px"><dl class="kv">
@@ -371,6 +376,7 @@ async function renderItem(id) {
   const reload = () => renderItem(id);
   const post = async (path, body, msg) => { try { await api(path, body); if (msg) toast(msg); reload(); } catch (e) { toast(e.message); } };
 
+  app.querySelector('#rename')?.addEventListener('submit', (e) => { e.preventDefault(); post(`/items/${id}/rename`, Object.fromEntries(new FormData(e.target)), 'Renamed'); });
   app.querySelector('#stage').addEventListener('change', (e) => post(`/items/${id}/stage`, { stage: e.target.value }, 'Stage updated'));
   app.querySelectorAll('[data-stage]').forEach((b) => b.addEventListener('click', () => post(`/items/${id}/stage`, { stage: b.dataset.stage }, 'Stage updated')));
   app.querySelector('#dropoff')?.addEventListener('submit', (e) => { e.preventDefault(); post(`/items/${id}/dropoff`, Object.fromEntries(new FormData(e.target)), 'Drop-off saved'); });
@@ -414,12 +420,18 @@ function gmailCard(g) {
 async function renderSettings() {
   const [s, status, d] = await Promise.all([api('/settings'), api('/status'), api('/dashboard')]);
   const gmailMsg = new URLSearchParams(location.hash.split('?')[1] ?? '').get('gmail');
+  const skipped = status.gmail.email ? (await api('/gmail/skipped')).skipped : [];
   app.innerHTML = `
     <h1>Settings</h1>
 
     ${gmailMsg ? `<div class="notice ${gmailMsg === 'connected' ? '' : 'warn'}">${gmailMsg === 'connected' ? 'Gmail connected (read-only). Tap Sync emails to import.' : esc(gmailMsg)}</div>` : ''}
     <h2>Gmail</h2>
     <div class="card">${gmailCard(status.gmail)}</div>
+    ${skipped.length ? `<details class="card"><summary>Emails the app skipped (${skipped.length})</summary>
+      <p class="small muted">Amazon emails the app looked at but didn't import, and why. If a real order is in this list, tell me its subject so the parser can learn it.</p>
+      ${skipped.map((m) => `<div class="skip"><div class="small title">${esc(m.subject || '(no subject)')}</div>
+        <div class="small muted">${esc(m.reason)}${m.received_at ? ` · ${new Date(m.received_at).toLocaleDateString()}` : ''} · <a href="${esc(m.web_link)}" target="_blank" rel="noopener">Open in Gmail</a></div></div>`).join('')}
+    </details>` : ''}
 
     <h2>Connections</h2>
     <div class="card"><dl class="kv">

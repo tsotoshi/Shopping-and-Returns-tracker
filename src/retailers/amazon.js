@@ -28,14 +28,15 @@ export function isFromAmazon(from) {
 export function classify(subject) {
   const s = subject.toLowerCase();
   if (/cancel|out for delivery|delay|review|rate your|recommend|deal|sale|prime day|your account|password|sign-in|verify/.test(s)) return null;
+  if (/\bsent you\b|\bshared\b|^fwd?:/.test(s)) return null; // someone else's order/return shared with you
   if (/return window|eligible for return|still time to return/.test(s)) return null;
   if (/refund/.test(s)) return 'refund_issued';
   if (/drop[- ]?off|dropped off/.test(s) && /receipt|received|confirm|complete/.test(s)) return 'dropped_off';
   if (/received your return|return (?:was |has been )?received|return.*(?:arrived|processed)/.test(s)) return 'return_received';
   if (/return/.test(s)) return 'return_started';
-  if (/^delivered:|was delivered|been delivered|delivered today/.test(s)) return 'delivered';
-  if (/^shipped:|has shipped|shipped:|is on the way|on its way/.test(s)) return 'shipped';
-  if (/^ordered:|your amazon\.com order|order confirmation|thanks for your order/.test(s)) return 'order_confirmation';
+  if (/^delivered\b|was delivered|been delivered|delivered today/.test(s)) return 'delivered';
+  if (/^shipped\b|has shipped|shipped:|is on the way|on its way/.test(s)) return 'shipped';
+  if (/^ordered\b|your amazon\.com order|order confirmation|thanks for your order/.test(s)) return 'order_confirmation';
   return null;
 }
 
@@ -134,72 +135,182 @@ function instructions(lines) {
   return picked.length ? picked.slice(0, 3).join(' ').slice(0, 400) : null;
 }
 
-export function parseAmazonEmail(msg) {
-  if (!isFromAmazon(msg.from)) return null;
+// Bump this whenever the parser improves: emails skipped by an older version
+// are automatically re-checked on the next sync.
+export const PARSER_VERSION = 2;
+
+const WEEKDAYS = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+const ORDER_LINE_RE = /order\s*(?:#|number|no\.?)\s*:?\s*(\d{3}-\d{7}-\d{7}|D\d{2}-\d{7}-\d{7})/i;
+
+/** "today 5 PM – 8 PM", "overnight 3 AM", "tomorrow", "Friday", "Friday, November 7" -> YYYY-MM-DD */
+export function parseArriving(str, refDate) {
+  const s = String(str).toLowerCase();
+  if (/\btoday\b/.test(s)) return refDate;
+  if (/\b(tomorrow|overnight)\b/.test(s)) return addDays(refDate, 1);
+  const exact = parseMonthDay(str, refDate);
+  if (exact) return exact;
+  const wd = WEEKDAYS.findIndex((d) => s.includes(d));
+  if (wd >= 0) {
+    const cur = new Date(`${refDate}T00:00:00Z`).getUTCDay();
+    return addDays(refDate, (wd - cur + 7) % 7);
+  }
+  return null;
+}
+
+/** Amazon's newer emails list categories instead of product names: "2 items: 1 Household Supplies, 1 Home Fragrance" or "1 Storage & Organization item". */
+export function parseCategoryItems(lines) {
+  for (const l of lines) {
+    let m = l.match(/^(\d+)\s+items?\s*:\s*(.+)$/i);
+    if (m) {
+      return m[2].split(/,\s*/).map((part) => {
+        const q = part.trim().match(/^(\d+)\s+(.+?)(?:\s+items?)?$/i);
+        return q ? { name: q[2].trim(), quantity: Number(q[1]) } : { name: part.trim(), quantity: 1 };
+      }).filter((x) => x.name && !/^(and\s+)?\d+\s+more/i.test(x.name));
+    }
+    m = l.match(/^(\d+)\s+(.+?)\s+items?$/i);
+    if (m && !/^more\b/i.test(m[2])) return [{ name: m[2].trim(), quantity: Number(m[1]) }];
+  }
+  return [];
+}
+
+/** Split an email into one block of lines per order number (some emails hold several orders). */
+export function orderBlocks(lines) {
+  const marks = [];
+  const seen = new Set();
+  lines.forEach((l, i) => {
+    const m = l.match(ORDER_LINE_RE);
+    if (m && !seen.has(m[1])) { seen.add(m[1]); marks.push({ i, orderNumber: m[1] }); }
+  });
+  if (!marks.length) return [];
+  const blocks = [];
+  let start = 0;
+  marks.forEach((mk, k) => {
+    const limit = marks[k + 1]?.i ?? lines.length;
+    let end = mk.i;
+    for (let j = mk.i + 1; j < limit; j++) {
+      if (/^(grand|order)\s+total\b/i.test(lines[j])) {
+        end = !MONEY_RE.test(lines[j]) && j + 1 < limit && /^\$\s?\d/.test(lines[j + 1]) ? j + 1 : j;
+        break;
+      }
+    }
+    if (k === marks.length - 1 && end === mk.i) end = lines.length - 1; // single/last order without a total: keep the rest
+    blocks.push({ orderNumber: mk.orderNumber, lines: lines.slice(start, end + 1) });
+    start = end + 1;
+  });
+  return blocks;
+}
+
+function totalOf(lines) {
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^(grand|order)\s+total\b/i.test(lines[i])) continue;
+    const m = lines[i].match(MONEY_RE) || (lines[i + 1] ?? '').match(MONEY_RE);
+    if (m) return toCents(m[1]);
+  }
+  return null;
+}
+
+const CATEGORY_NOTE = "Amazon's email only gave the category, not the product name. Use Rename to give it a name you'll recognize.";
+const TOTAL_NOTE = "Price is the order's grand total (includes tax and shipping), since the email didn't list item prices.";
+
+/** Items, delivery estimate and total for one order's lines. */
+function readOrder(lines, { kind, subject, date }) {
+  let items = parseItems(lines);
+  if (!items.length) {
+    items = parseCategoryItems(lines).map((it) => ({ ...it, unitPriceCents: null, seller: null, note: CATEGORY_NOTE }));
+  }
+  const subj = subjectItem(subject);
+  if (!items.length && subj.name) items = [{ name: subj.name, quantity: kind === 'order_confirmation' ? 1 : undefined }];
+  const orderTotalCents = totalOf(lines);
+  if (kind === 'order_confirmation' && items.length === 1 && (items[0].quantity ?? 1) === 1 && items[0].unitPriceCents == null && orderTotalCents != null) {
+    items[0].unitPriceCents = orderTotalCents;
+    items[0].note = [items[0].note, TOTAL_NOTE].filter(Boolean).join(' ');
+  }
+  const text = lines.join('\n');
+  let estimatedDeliveryDate = null;
+  const arr = text.match(/(?:arriving|estimated delivery|expected by|delivery estimate)\s*:?\s*([^\n]{3,40})/i);
+  if (arr) estimatedDeliveryDate = parseArriving(arr[1], date);
+  return { items, orderTotalCents, estimatedDeliveryDate };
+}
+
+/**
+ * Decoded Gmail message -> array of parsed emails (one per order in the email),
+ * or [] if it isn't an order/shipping/return/refund email from Amazon.
+ */
+export function parseAmazonEmails(msg) {
+  if (!isFromAmazon(msg.from)) return [];
   const kind = classify(msg.subject);
-  if (!kind) return null;
+  if (!kind) return [];
 
   const text = msg.text ?? '';
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  const orderNumber = (msg.subject.match(ORDER_RE) || text.match(ORDER_RE) || [])[1] ?? null;
-  const warnings = [];
+  let blocks = orderBlocks(lines);
+  if (!blocks.length) {
+    const orderNumber = (msg.subject.match(ORDER_RE) || text.match(ORDER_RE) || [])[1] ?? null;
+    blocks = [{ orderNumber, lines }];
+  }
+  const multi = blocks.length > 1;
 
-  let items = parseItems(lines);
-  const subj = subjectItem(msg.subject);
-  if (!items.length && subj.name) items = [{ name: subj.name, quantity: kind === 'order_confirmation' ? 1 : undefined }];
-  if (subj.more && items.length < subj.more + 1) {
-    warnings.push(`The subject mentions ${subj.more + 1} items but only ${items.length} could be read — please check this order.`);
-  }
-  if (kind === 'order_confirmation' && !items.length) warnings.push('No items could be read from this order confirmation.');
-  if (kind === 'order_confirmation' && items.some((i) => i.unitPriceCents == null)) warnings.push('Some item prices could not be read.');
-  if (kind !== 'order_confirmation') {
-    // Quantity in non-order emails only matters for returns (partial returns).
-    for (const it of items) if (kind !== 'return_started') delete it.quantity;
-  }
+  const results = blocks.map((b) => {
+    const warnings = [];
+    const { items, orderTotalCents, estimatedDeliveryDate } = readOrder(b.lines, { kind, subject: msg.subject, date: msg.date });
+    if (kind !== 'return_started') for (const it of items) if (kind !== 'order_confirmation') delete it.quantity;
+    if (kind === 'order_confirmation' && !items.length) warnings.push('No items could be read from this order confirmation.');
+    if (!b.orderNumber) warnings.push('No Amazon order number found.');
+    const blockText = b.lines.join('\n');
 
-  const parsed = {
-    provider: 'gmail',
-    messageId: msg.id,
-    threadId: msg.threadId,
-    retailer: 'amazon',
-    kind,
-    subject: msg.subject,
-    from: msg.from,
-    receivedAt: msg.receivedAt,
-    eventDate: msg.date,
-    orderNumber,
-    items,
-    warnings,
-  };
-  if (kind === 'order_confirmation') {
-    parsed.orderDate = msg.date;
-    parsed.paymentMethod = paymentMethod(text);
-  }
-  if (kind === 'shipped' || kind === 'order_confirmation') {
-    const arr = text.match(/(?:arriving|estimated delivery|expected by|delivery estimate)\s*:?\s*([^\n]{3,40})/i);
-    if (arr) {
-      if (/tomorrow/i.test(arr[1])) parsed.estimatedDeliveryDate = addDays(msg.date, 1);
-      else if (/today/i.test(arr[1])) parsed.estimatedDeliveryDate = msg.date;
-      else parsed.estimatedDeliveryDate = parseMonthDay(arr[1], msg.date);
+    const parsed = {
+      provider: 'gmail',
+      // Several orders in one email get their own IDs, so each is imported exactly once.
+      messageId: multi ? `${msg.id}#${b.orderNumber}` : msg.id,
+      threadId: msg.threadId,
+      retailer: 'amazon',
+      kind,
+      subject: msg.subject,
+      from: msg.from,
+      receivedAt: msg.receivedAt,
+      eventDate: msg.date,
+      orderNumber: b.orderNumber,
+      items,
+      warnings,
+      orderTotalCents,
+    };
+    if (kind === 'order_confirmation') {
+      parsed.orderDate = msg.date;
+      parsed.paymentMethod = paymentMethod(text);
     }
+    if ((kind === 'shipped' || kind === 'order_confirmation') && estimatedDeliveryDate) parsed.estimatedDeliveryDate = estimatedDeliveryDate;
+    if (kind === 'delivered') parsed.deliveredDate = msg.date;
+    if (kind === 'return_started') {
+      const by = blockText.match(/(?:drop[- ]?off|ship|send|return)[a-z ]{0,25}\bby\s*:?\s*([^\n]{3,40})/i);
+      if (by) parsed.dropoffBy = parseMonthDay(by[1], msg.date);
+      parsed.labelUrl = safeLinks(msg.links ?? [], /label/i);
+      parsed.qrUrl = safeLinks(msg.links ?? [], /\bqr\b|qr[-_ ]?code/i);
+      parsed.instructions = instructions(b.lines);
+      const refund = blockText.match(/(?:refund|estimated refund)[^\n$]{0,30}\$\s?(\d{1,3}(?:,\d{3})*\.\d{2})/i);
+      if (refund && items.length === 1) items[0].refundCents = toCents(refund[1]);
+    }
+    if (kind === 'refund_issued') {
+      const amt = blockText.match(/(?:refund(?:ed)?|total refund|refund total|amount)[^\n$]{0,40}\$\s?(\d{1,3}(?:,\d{3})*\.\d{2})/i);
+      if (amt) parsed.refundCents = toCents(amt[1]);
+      else warnings.push('The refund amount could not be read from this email.');
+      parsed.refundDestination = paymentMethod(text);
+      parsed.refundTiming = parseRefundTiming(blockText);
+    }
+    return parsed;
+  });
+
+  // Cross-check the count in subjects like "Ordered 3 items: ..." or "... and 2 more items".
+  const subjCount = msg.subject.match(/^ordered:?\s*(\d+)\s+items?\b/i);
+  const subj = subjectItem(msg.subject);
+  const expected = subjCount ? Number(subjCount[1]) : subj.more ? subj.more + 1 : null;
+  const found = results.reduce((sum, r) => sum + r.items.reduce((s, it) => s + (it.quantity ?? 1), 0), 0);
+  if (kind === 'order_confirmation' && expected && found < expected) {
+    results[0].warnings.push(`The subject mentions ${expected} items but only ${found} could be read — please check this order.`);
   }
-  if (kind === 'delivered') parsed.deliveredDate = msg.date;
-  if (kind === 'return_started') {
-    const by = text.match(/(?:drop[- ]?off|ship|send|return)[a-z ]{0,25}\bby\s*:?\s*([^\n]{3,40})/i);
-    if (by) parsed.dropoffBy = parseMonthDay(by[1], msg.date);
-    parsed.labelUrl = safeLinks(msg.links ?? [], /label/i);
-    parsed.qrUrl = safeLinks(msg.links ?? [], /\bqr\b|qr[-_ ]?code/i);
-    parsed.instructions = instructions(lines);
-    const refund = text.match(/(?:refund|estimated refund)[^\n$]{0,30}\$\s?(\d{1,3}(?:,\d{3})*\.\d{2})/i);
-    if (refund && items.length === 1) items[0].refundCents = toCents(refund[1]);
-  }
-  if (kind === 'refund_issued') {
-    const amt = text.match(/(?:refund(?:ed)?|total refund|refund total|amount)[^\n$]{0,40}\$\s?(\d{1,3}(?:,\d{3})*\.\d{2})/i);
-    if (amt) parsed.refundCents = toCents(amt[1]);
-    else warnings.push('The refund amount could not be read from this email.');
-    parsed.refundDestination = paymentMethod(text);
-    parsed.refundTiming = parseRefundTiming(text);
-  }
-  if (!orderNumber) warnings.push('No Amazon order number found.');
-  return parsed;
+  return results;
+}
+
+/** Single-result helper (first order in the email), kept for simple callers and tests. */
+export function parseAmazonEmail(msg) {
+  return parseAmazonEmails(msg)[0] ?? null;
 }

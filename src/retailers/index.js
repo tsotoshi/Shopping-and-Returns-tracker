@@ -3,7 +3,7 @@
 // services/ingest.js understands. Adding a retailer = adding an entry here
 // plus a parser file; the sync and import code don't change.
 
-import { parseAmazonEmail } from './amazon.js';
+import { parseAmazonEmails, PARSER_VERSION, isFromAmazon } from './amazon.js';
 
 export const RETAILERS = {
   amazon: {
@@ -12,7 +12,9 @@ export const RETAILERS = {
     // Gmail search (read-only). Sender + subject words keep us from
     // downloading unrelated mail; the parser double-checks each message.
     gmailQuery: 'from:amazon.com subject:(ordered OR order OR shipped OR delivered OR return OR refund OR "drop off")',
-    parse: parseAmazonEmail,
+    parse: parseAmazonEmails, // returns one parsed email per order (an email can hold several)
+    parserVersion: PARSER_VERSION,
+    isFrom: isFromAmazon,
   },
 };
 

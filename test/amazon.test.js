@@ -49,7 +49,7 @@ test('falls back to the subject item and warns when items are missing', () => {
   assert.equal(p.items.length, 1);
   assert.equal(p.items[0].name, 'Desk Lamp');
   assert.ok(p.warnings.some((w) => /mentions 3 items/.test(w)));
-  assert.ok(p.warnings.some((w) => /prices/.test(w)));
+  assert.ok(!p.warnings.some((w) => /prices/.test(w)), 'missing prices are normal now, not a warning');
 });
 
 test('return started: drop-off date, QR link only from amazon.com, partial quantity', () => {

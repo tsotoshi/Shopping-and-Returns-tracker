@@ -15,7 +15,7 @@ import { RETAILERS } from './retailers/index.js';
 import crypto from 'node:crypto';
 import { googleConfig, buildAuthUrl, exchangeCode } from './gmail/oauth.js';
 import { getAccount, saveAccount, disconnect, tokenProvider } from './gmail/account.js';
-import { createGmailClient } from './gmail/client.js';
+import { createGmailClient, gmailWebLink } from './gmail/client.js';
 import { syncGmail, lastSyncRun, isSyncing } from './services/sync.js';
 import Anthropic from '@anthropic-ai/sdk';
 import { reviewPolicies, itemsNeedingReview, isReviewing, setPolicyLink } from './services/policyReviews.js';
@@ -137,6 +137,7 @@ export function createApp(db, {
   api.post('/items/:id/stage', wrap((req) => { items.manualStage(db, id(req), req.body.stage, req.body.note, today()); return itemDetail(db, id(req)); }));
   api.post('/items/:id/dropoff', wrap((req) => { items.markDroppedOff(db, id(req), req.body.date, today()); return itemDetail(db, id(req)); }));
   api.post('/items/:id/deadlines', wrap((req) => { items.correctDeadlines(db, id(req), req.body, today()); return itemDetail(db, id(req)); }));
+  api.post('/items/:id/rename', wrap((req) => { items.renameItem(db, id(req), req.body.name, today()); return itemDetail(db, id(req)); }));
   api.post('/items/:id/expected-refund', wrap((req) => { items.setExpectedRefund(db, id(req), toCents(req.body.amount), today()); return itemDetail(db, id(req)); }));
   api.post('/items/:id/refund/received', wrap((req) => { items.confirmRefund(db, id(req), { amountCents: toCents(req.body.amount), date: req.body.date }, today()); return itemDetail(db, id(req)); }));
   api.post('/items/:id/refund/not-yet', wrap((req) => { items.snoozeRefund(db, id(req), today()); return itemDetail(db, id(req)); }));
@@ -178,6 +179,15 @@ export function createApp(db, {
     return runReview(res, [id(req)]);
   });
 
+  // Emails the app looked at and skipped, so you can see what it ignored and why.
+  api.get('/gmail/skipped', wrap(() => {
+    const acct = getAccount(db);
+    return {
+      skipped: db.prepare(`SELECT message_id, subject, from_addr, reason, received_at FROM skipped_messages
+                           WHERE subject IS NOT NULL ORDER BY received_at DESC LIMIT 40`).all()
+        .map((r) => ({ ...r, web_link: gmailWebLink(r.message_id, acct?.email) })),
+    };
+  }));
   api.post('/gmail/disconnect', async (req, res) => {
     await disconnect(db, fetchImpl);
     res.json({ ok: true });
