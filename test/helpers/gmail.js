@@ -17,8 +17,21 @@ export function fakeGmail(messages) {
   return {
     calls,
     add(m) { messages.push(m); },
-    async listMessageIds(q) { calls.list.push(q); return [...messages].reverse().map((m) => m.id); }, // newest first, like Gmail
+    async listMessageIds(q) {
+      calls.list.push(q);
+      // Honor the sender part of the search, like Gmail would (newest first, like Gmail).
+      const fromOf = (m) => m.payload.headers.find((h) => h.name === 'From')?.value ?? '';
+      return [...messages].reverse()
+        .filter((m) => (q.startsWith('from:amazon.com') ? fromOf(m).includes('amazon.com') : q.includes('-from:amazon.com') ? !fromOf(m).includes('amazon.com') : true))
+        .map((m) => m.id);
+    },
     async getMessage(id) { calls.get.push(id); return messages.find((m) => m.id === id); },
+    async getMessageMeta(id) {
+      calls.meta = (calls.meta ?? 0) + 1;
+      const m = messages.find((x) => x.id === id);
+      const body = (m.payload.parts ?? []).map((p) => Buffer.from(p.body.data.replace(/-/g, '+').replace(/_/g, '/'), 'base64').toString()).join(' ');
+      return { id: m.id, internalDate: m.internalDate, snippet: body.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 200), payload: { headers: m.payload.headers } };
+    },
     async profile() { return { emailAddress: 'me@example.com' }; },
   };
 }

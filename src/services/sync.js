@@ -5,7 +5,7 @@
 
 import { addDays } from '../lib/dates.js';
 import { ingestParsedEmail } from './ingest.js';
-import { decodeMessage, gmailWebLink } from '../gmail/client.js';
+import { decodeMessage, decodeMeta, gmailWebLink } from '../gmail/client.js';
 import { getAccount } from '../gmail/account.js';
 import { RETAILERS } from '../retailers/index.js';
 
@@ -16,7 +16,7 @@ export function lastSyncRun(db) {
   return db.prepare('SELECT * FROM sync_runs ORDER BY id DESC LIMIT 1').get() ?? null;
 }
 
-export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages = 500, retailers = RETAILERS } = {}) {
+export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages = 500, retailers = RETAILERS, amazonFromSite = false } = {}) {
   if (running) throw new Error('A sync is already running.');
   running = true;
   const startedAt = new Date().toISOString();
@@ -43,18 +43,37 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
 
     for (const r of Object.values(retailers)) {
       if (!r.parse) continue;
-      const q = `${r.gmailQuery} ${since ? `after:${since.replace(/-/g, '/')}` : `newer_than:${firstSyncDays}d`}`;
-      const ids = (await client.listMessageIds(q, maxMessages)).reverse(); // oldest first: orders before deliveries
+      const opts = { amazonFromSite };
+      const baseQuery = typeof r.gmailQuery === 'function' ? r.gmailQuery(opts) : r.gmailQuery;
+      const q = `${baseQuery} ${since ? `after:${since.replace(/-/g, '/')}` : `newer_than:${firstSyncDays}d`}`;
+      const ids = (await client.listMessageIds(q, r.maxMessages ?? maxMessages)).reverse(); // oldest first: orders before deliveries
+      const skipKinds = r.skipKinds ? r.skipKinds(opts) : [];
       for (const id of ids) foundIds.add(id);
       c.found = foundIds.size;
-      const v = r.parserVersion ?? 1;
+      // The version includes the mode, so switching Amazon order details on/off re-checks skipped emails.
+      const v = `${r.parserVersion ?? 1}${r.modeTag ? r.modeTag(opts) : ''}`;
       const p = `gmail:${r.id}`;
       for (const id of ids) {
         if (importedThisRun.has(id)) continue;
         if (imported.get({ id, prefix: `${id}#%` }) || skippedNow.get({ p, id, v })) { once(id, 'already_had'); continue; }
         try {
+          // Cheap look first (sender, subject, preview) for the broad all-mail search.
+          if (r.triage && client.getMessageMeta) {
+            const meta = decodeMeta(await client.getMessageMeta(id));
+            if (!r.triage(meta)) {
+              skip.run({ p, id, reason: "doesn't look like a purchase (from its sender, subject and preview)", subject: meta.subject, from: meta.from, receivedAt: meta.receivedAt, v });
+              once(id, 'ignored');
+              continue;
+            }
+          }
           const msg = decodeMessage(await client.getMessage(id));
-          const results = [].concat(r.parse(msg) ?? []);
+          const parsedAll = [].concat(r.parse(msg) ?? []);
+          const results = parsedAll.filter((x) => !skipKinds.includes(x.kind));
+          if (parsedAll.length && !results.length) {
+            skip.run({ p, id, reason: 'Amazon purchases come from your Amazon order pages', subject: msg.subject, from: msg.from, receivedAt: msg.receivedAt, v });
+            once(id, 'ignored');
+            continue;
+          }
           if (!results.length) {
             const reason = r.isFrom && !r.isFrom(msg.from) ? 'not from a verified retailer address' : 'not an order, shipping, return, or refund email';
             skip.run({ p, id, reason, subject: msg.subject, from: msg.from, receivedAt: msg.receivedAt, v });

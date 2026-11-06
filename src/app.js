@@ -155,10 +155,11 @@ export function createApp(db, {
     if (!google.configured) return res.status(400).json({ error: 'Gmail is not set up yet — see Settings.' });
     if (!acct) return res.status(400).json({ error: 'Connect Gmail in Settings first. Nothing was synced.' });
     try {
-      const result = await syncGmail(db, { client: makeGmailClient() });
-      if (getSettings(db).amazonSiteEnabled && amazonSite.config.available) {
-        result.amazonSite = await syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() });
-      }
+      // Amazon order pages first (they create Amazon purchases), then emails.
+      const amazonFromSite = getSettings(db).amazonSiteEnabled && amazonSite.config.available;
+      const site = amazonFromSite ? await syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() }) : null;
+      const result = await syncGmail(db, { client: makeGmailClient(), amazonFromSite });
+      if (site) result.amazonSite = site;
       res.json(result);
     } catch (e) {
       if (e.reconnect || e.status === 401) {
@@ -232,6 +233,7 @@ export function createApp(db, {
   const channelsNow = () => notifyChannels(getSettings(db));
   const scheduler = createScheduler(db, {
     gmailReady: () => google.configured,
+    amazonFromSite: () => getSettings(db).amazonSiteEnabled && amazonSite.config.available,
     amazonSite: () => (getSettings(db).amazonSiteEnabled && amazonSite.config.available
       ? () => syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() })
       : null),

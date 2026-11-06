@@ -239,3 +239,47 @@ test('Costco-style confirmation: "order N is confirmed" subject, item numbers ar
   assert.deepEqual(p.items.map((i) => [i.name, i.retailerItemId, i.quantity, i.unitPriceCents]), [['Samsung 65" Class - S85H OLED Series - 4K Vision AI Smart TV', '1711427', 1, 179999]]);
   assert.equal(p.orderTotalCents, 192599);
 });
+
+test('with Amazon order details on: Amazon purchase emails are skipped, returns/refunds still read', async () => {
+  const db = openDb(':memory:');
+  saveAccount(db, { email: 'me@example.com', tokens: { refresh_token: 'r', access_token: 'a', expires_in: 3600, scope: 's' } });
+  const gmail = fakeGmail([
+    gmailMessage({ id: 'o1', subject: 'Ordered 3 items: Storage & Organization, Household Supplies, and more', html: twoOrderHtml, date: '2026-11-05T07:51:00' }),
+    gmailMessage({ id: 'ret', subject: 'Your return request for "Home Fragrance"', date: '2026-11-08T10:00:00',
+      html: '<p>Order # 111-3646931-0001058</p><p>Home Fragrance</p><p>Quantity: 1</p><p>Drop off by November 20</p>' }),
+  ]);
+  const r = await syncGmail(db, { client: gmail, amazonFromSite: true });
+  assert.ok(gmail.calls.list.some((q) => q.startsWith('from:amazon.com subject:(return OR refund')));
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM emails WHERE kind = 'order_confirmation'").get().n, 0);
+  assert.match(db.prepare("SELECT reason FROM skipped_messages WHERE message_id = 'o1' AND provider = 'gmail:amazon'").get().reason, /Amazon order pages/);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM emails WHERE kind = 'return_started'").get().n, 1);
+  assert.equal(r.imported, 1);
+
+  // Turning Amazon order details off re-checks those skipped purchase emails
+  await syncGmail(db, { client: gmail, amazonFromSite: false });
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM emails WHERE kind = 'order_confirmation'").get().n, 2);
+});
+
+test('all-mail search: obvious non-purchases are skipped from the preview, without downloading them', async () => {
+  const db = openDb(':memory:');
+  saveAccount(db, { email: 'me@example.com', tokens: { refresh_token: 'r', access_token: 'a', expires_in: 3600, scope: 's' } });
+  const gmail = fakeGmail([
+    gmailMessage({ id: 'n1', subject: 'Your weekly newsletter', from: 'Blog <news@blog.example>', text: 'Read our latest posts about receipts and budgeting' }),
+    gmailMessage({ id: 'r1', subject: 'Your ride receipt', from: 'Lyft <no-reply@lyft.com>', text: 'Order # 123456789' }),
+    gmailMessage({ id: 'c1', subject: 'Your Costco.com order 1317669410 is confirmed!', from: 'Costco Orders <Costco@orders.costco.com>', date: '2026-09-27T23:57:00',
+      text: 'Samsung 65" OLED TV\nItem #1711427\nQty: 1\n$1,799.99' }),
+  ]);
+  await syncGmail(db, { client: gmail });
+  assert.ok(!gmail.calls.get.includes('n1') && !gmail.calls.get.includes('r1'), 'skipped from the preview alone');
+  assert.match(db.prepare("SELECT reason FROM skipped_messages WHERE message_id = 'n1' AND provider = 'gmail:other'").get().reason, /look like a purchase/);
+  assert.equal(db.prepare("SELECT merchant_name FROM orders WHERE order_number = '1317669410'").get().merchant_name, 'Costco');
+});
+
+test('order emails with an unhelpful subject are recognized from their text', () => {
+  const [p] = parse({ id: 'x1', subject: 'A note about your recent visit', from: 'REI <rei@notices.rei.com>', date: '2026-11-01T10:00:00',
+    text: 'Thank you for your order!\nOrder number: 9988776655\nTrail Running Shoe\nQuantity: 1\n$129.95' });
+  assert.equal(p.kind, 'order_confirmation');
+  assert.equal(p.orderNumber, '9988776655');
+  assert.equal(p.items[0].name, 'Trail Running Shoe');
+  assert.deepEqual(parse({ id: 'x2', subject: '30% off this weekend only', from: 'REI <rei@notices.rei.com>', text: 'Thank you for your order! Order number: 1234567' }), []);
+});

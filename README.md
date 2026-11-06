@@ -57,15 +57,15 @@ The app creates reminders when a return deadline is near (default: 3 days before
 
 ## Other stores
 
-Besides Amazon, sync looks for order emails from **any store**, using Gmail's own *Purchases* category plus order-related subject words, and skipping promotions. For each email:
-- **Best case:** the store includes a standard machine-readable order summary (schema.org, the data Gmail uses for order "highlights"), which gives items, prices and status.
-- **Otherwise:** general rules (subject wording, "Order #…", "Quantity:" lines). Emails with no order number are skipped, and listed in Settings → *Emails the app skipped*.
-- **Not shopping:** rides, food delivery, banks, payment apps and subscriptions are ignored. Any store can be turned off with *Stop tracking* on one of its items.
-- **Return policies:** the AI review reads each store's policy on that store's own website.
+Sync searches **all your mail** for order emails from any store, using Gmail's full-text search for purchase phrases ("order number", "receipt", "has shipped", "refund"…), not just Gmail's Purchases category.
+- **Cheap first look:** for each match, the app reads only the sender, subject and Gmail's preview. It downloads the full email only if it looks like a purchase.
+- **Reading it:** first the store's standard order summary if it includes one (schema.org), then general rules. If the subject is unhelpful, the email's own text is checked for phrases like "Thank you for your order". Emails with no order number are skipped and listed in Settings → *Emails the app skipped*.
+- **Not shopping:** rides, food delivery, banks, payment apps, subscriptions, promotions and Amazon look-alike senders are ignored. Any store can be turned off with *Stop tracking*.
+- **No AI** reads your emails; it's all rules. When a store's format isn't recognized, it shows up in the skipped list so the rules can be improved.
 
 ## Amazon order details (optional)
 
-Amazon's emails often give only a category ("Household Supplies") and an order total. If you turn this on, the app uses the open-source [amazon-orders](https://github.com/alexdlaird/amazon-orders) tool to read your **Amazon order pages** during each sync and fill in real **product names, prices, sellers and Amazon's own return dates** (shown as *Confirmed*). Orders no email covered are added too. Emails remain the source for returns and refunds.
+Amazon's emails often give only a category ("Household Supplies") and an order total. If you turn this on, **Amazon purchases come from your Amazon order pages**, read with the open-source [amazon-orders](https://github.com/alexdlaird/amazon-orders) tool: real **product names, prices and Amazon's own return dates** (shown as *Confirmed*). Item prices come from each order's detail page, which is loaded only for orders still missing prices (at most 15 per sync). Amazon **emails** are then only used for **returns and refunds**.
 
 Setup (one time):
 1. Install Python from **python.org**. That installer doesn't need Apple's developer tools.

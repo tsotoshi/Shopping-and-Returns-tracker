@@ -23,7 +23,7 @@ test('first sync imports; second sync skips everything without re-downloading', 
   assert.equal(db.prepare('SELECT COUNT(*) n FROM items').get().n, 2);
   const amazonQueries = () => gmail.calls.list.filter((q) => q.startsWith('from:amazon.com'));
   assert.match(amazonQueries()[0], /newer_than:180d/);
-  assert.ok(gmail.calls.list.some((q) => q.startsWith('(category:purchases')), 'also searches other stores');
+  assert.ok(gmail.calls.list.some((q) => q.includes('"order number"') && !q.includes('category:')), 'also searches all mail for other stores');
 
   const before = gmail.calls.get.length;
   const r2 = await syncGmail(db, { client: gmail });

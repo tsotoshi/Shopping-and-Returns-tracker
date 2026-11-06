@@ -10,7 +10,7 @@
 
 import { parseItems, parseCategoryItems, parseMonthDay, parseRefundTiming, parseArriving, paymentMethod, instructions } from './amazon.js';
 
-export const GENERIC_PARSER_VERSION = 2; // v2: "Your Store.com order 123 is confirmed" subjects, Item # lines
+export const GENERIC_PARSER_VERSION = 3; // v3: search all mail + preview triage; recognize order emails by their text, not just subject
 
 // Senders whose "orders" aren't returnable shopping (rides, food, money, subscriptions).
 const NOT_SHOPPING = [
@@ -44,9 +44,36 @@ export function senderInfo(from) {
 
 export const isShoppingSender = (domain) => !!domain && !NOT_SHOPPING.some((d) => domain === d || domain.endsWith(`.${d}`));
 
+const PROMO_RE = /\b\d+% off\b|\bsale\b|\bdeals?\b|\bcoupon|\bsave \$|newsletter|recommend|review|survey|rate your|your cart|wish ?list|back in stock|price drop|last chance|ends (today|tonight)|reward points|\bsent you\b|^fwd?:/;
+export const isPromoSubject = (subject) => PROMO_RE.test(String(subject).toLowerCase());
+
+/** Purchase phrases in an email's text (used when the subject alone doesn't say). */
+export function classifyText(text) {
+  const t = String(text).slice(0, 2500).toLowerCase();
+  if (/refund (?:of|for|has been|was|is being) |we(?:'ve| have) (?:issued|processed) (?:a|your) refund/.test(t)) return 'refund_issued';
+  if (/received your return|return (?:was|has been) received/.test(t)) return 'return_received';
+  if (/return (?:request|label|authori[sz]ation|started|is ready)|start(?:ed)? (?:a|your) return/.test(t)) return 'return_started';
+  if (/(?:was|has been) delivered|delivered to your/.test(t)) return 'delivered';
+  if (/has shipped|have shipped|on (?:its|the) way|shipment (?:is|has)|tracking number/.test(t)) return 'shipped';
+  if (/thanks? (?:you )?for (?:your )?(?:order|purchase)|order (?:confirmation|confirmed|received|placed|is confirmed)|we(?:'ve| have) received your order/.test(t)) return 'order_confirmation';
+  return null;
+}
+
+/**
+ * Cheap first look using only sender, subject and Gmail's preview, so the app
+ * only downloads emails that look like purchases.
+ */
+export function looksLikePurchase({ subject, from, snippet }) {
+  const sender = senderInfo(from);
+  if (!isShoppingSender(sender.domain) || /amazon/i.test(`${sender.address} ${from}`)) return false;
+  if (isPromoSubject(subject)) return false;
+  if (classifyGeneric(subject)) return true;
+  return /order\s*(?:#|number|no\.?|confirm)|receipt|has shipped|on its way|was delivered|your package|refund|thanks? (?:you )?for (?:your )?(?:order|purchase)/i.test(`${subject} ${snippet ?? ''}`);
+}
+
 export function classifyGeneric(subject) {
   const s = String(subject).toLowerCase();
-  if (/\b\d+% off\b|\bsale\b|\bdeals?\b|\bcoupon|\bsave \$|newsletter|recommend|review|survey|rate your|your cart|wish ?list|back in stock|price drop|last chance|ends (today|tonight)|reward points|\bsent you\b|^fwd?:/.test(s)) return null;
+  if (PROMO_RE.test(s)) return null;
   if (/return policy|return window/.test(s)) return null;
   if (/\brefund/.test(s)) return 'refund_issued';
   if (/drop[- ]?off|dropped off/.test(s) && /receipt|received|confirm/.test(s)) return 'dropped_off';
@@ -128,7 +155,10 @@ export function parseGenericEmails(msg) {
   if (structured.length) {
     orders = structured.map((o) => ({ ...o, kind: o.kind ?? subjectKind ?? 'order_confirmation', fromMarkup: true }));
   } else {
-    if (!subjectKind) return [];
+    // Subject first; if it doesn't say, look for purchase phrases in the email itself
+    // (never for promotional subjects).
+    const kind = subjectKind ?? (isPromoSubject(msg.subject) ? null : classifyText(text));
+    if (!kind) return [];
     const orderNumber = (msg.subject.match(ORDER_NUM_RE) || text.match(ORDER_NUM_RE)
       || msg.subject.match(/#\s?([A-Z0-9][A-Z0-9-]{5,30})\b/i)
       || msg.subject.match(/\border\s+(\d[A-Z0-9-]{5,30})\b/i) // "Your Costco.com order 1317669410 is confirmed"
@@ -136,7 +166,7 @@ export function parseGenericEmails(msg) {
     if (!orderNumber) return []; // can't tie it to an order: skip rather than guess
     let items = parseItems(lines);
     if (!items.length) items = parseCategoryItems(lines).map((it) => ({ ...it, categoryName: true }));
-    orders = [{ orderNumber, items, kind: subjectKind, fromMarkup: false }];
+    orders = [{ orderNumber, items, kind, fromMarkup: false }];
   }
 
   const multi = orders.length > 1;

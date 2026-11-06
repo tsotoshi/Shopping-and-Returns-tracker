@@ -185,7 +185,7 @@ function amazonSiteCard(a, s) {
       <p class="small muted">What to know: this uses the open-source amazon-orders tool. It only reads your order history. Amazon doesn't officially support tools like this, so you may occasionally see extra Amazon security checks, and it can stop working until updated when Amazon changes its site.</p></details>`;
   }
   return `<form class="settings-form">
-      <label class="check"><input type="checkbox" name="amazonSiteEnabled" ${s.amazonSiteEnabled ? 'checked' : ''}> <span>Fill in product names, prices and return dates from my Amazon order pages during sync</span></label>
+      <label class="check"><input type="checkbox" name="amazonSiteEnabled" ${s.amazonSiteEnabled ? 'checked' : ''}> <span>Get Amazon purchases from my Amazon order pages (real names, prices, return dates). Amazon emails are then only used for returns and refunds.</span></label>
       <div class="actions"><button class="btn primary">Save</button>${s.amazonSiteEnabled ? '<button class="btn" type="button" id="amazon-now">Check Amazon now</button>' : ''}</div>
     </form>
     ${last ? `<p class="small ${last.ok ? 'muted' : ''}">Last check: ${new Date(last.at).toLocaleString()} — ${last.ok ? `${last.summary.orders} orders read, ${last.summary.named + last.summary.created} items updated, ${last.summary.returnDates} return dates added` : esc(amazonError(last.error))}</p>` : ''}
@@ -474,7 +474,7 @@ async function renderSettings() {
     <h2>Connections</h2>
     <div class="card"><dl class="kv">
       <dt>AI review</dt><dd>${status.ai.configured ? `<span class="badge ok">Set up</span> <span class="small muted">${status.ai.pending} item${status.ai.pending === 1 ? '' : 's'} waiting for review</span>` : '<span class="badge">Not set up</span> <span class="small muted">Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> and restart.</span>'}</dd>
-      <dt>Stores</dt><dd>Amazon, plus other stores' order emails (from Gmail's Purchases category)</dd>
+      <dt>Stores</dt><dd>Amazon (from your order pages when Amazon order details is on), plus order emails from any store found by searching all your mail</dd>
     </dl></div>
 
     <h2>Sample data</h2>

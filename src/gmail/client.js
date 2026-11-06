@@ -36,6 +36,8 @@ export function createGmailClient({ getAccessToken, fetchImpl = fetch }) {
       return ids;
     },
     getMessage: (id) => call(`/messages/${encodeURIComponent(id)}?format=full`),
+    /** Just the sender, subject, date and Gmail's short preview: cheap triage before downloading a whole email. */
+    getMessageMeta: (id) => call(`/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=Subject&metadataHeaders=From&metadataHeaders=Date`),
   };
 }
 
@@ -127,6 +129,12 @@ export function decodeMessage(msg) {
     links: html ? extractLinks(html) : [],
     structured: html ? extractStructuredData(html) : [],
   };
+}
+
+export function decodeMeta(msg) {
+  const headers = Object.fromEntries((msg.payload?.headers ?? []).map((h) => [h.name.toLowerCase(), h.value]));
+  const ms = Number(msg.internalDate) || Date.parse(headers.date) || Date.now();
+  return { id: msg.id, subject: headers.subject ?? '', from: headers.from ?? '', snippet: decodeEntities(msg.snippet ?? ''), receivedAt: new Date(ms).toISOString() };
 }
 
 export function gmailWebLink(messageId, accountEmail) {
