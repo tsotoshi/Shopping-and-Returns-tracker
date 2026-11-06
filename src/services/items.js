@@ -280,7 +280,7 @@ export function renameItem(db, itemId, name, today = todayISO()) {
   const item = mustItem(db, itemId);
   const clean = String(name ?? '').trim().slice(0, 200);
   if (!clean) throw new UserError('Please enter a name.');
-  update(db, 'items', itemId, { name: clean, email_name: item.email_name ?? item.name });
+  update(db, 'items', itemId, { name: clean, email_name: item.email_name ?? item.name, name_source: 'you' }); // your name always wins
   addEvent(db, itemId, { kind: 'renamed', occurredAt: today, source: 'manual', detail: `Renamed from "${item.name}" to "${clean}"` });
   return getItem(db, itemId);
 }

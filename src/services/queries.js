@@ -6,7 +6,7 @@ import { outstandingCents, refundBucket, isOpen } from '../lib/refunds.js';
 import { stageLabel, STAGES } from '../lib/stages.js';
 
 const ITEM_SELECT = `
-  SELECT i.*, o.retailer, o.order_number, o.order_date, o.payment_method,
+  SELECT i.*, o.retailer, o.order_number, o.order_date, o.payment_method, o.merchant_name,
          r.id AS refund_id, r.expected_cents, r.issued_cents, r.confirmed_cents, r.status AS refund_status,
          r.window_end, r.window_kind, r.next_check_at, r.issued_at, r.destination
   FROM items i
@@ -31,7 +31,8 @@ export function listItems(db, { q, store, stage } = {}) {
 }
 
 export function stores(db) {
-  return db.prepare('SELECT DISTINCT retailer FROM orders ORDER BY retailer').all().map((r) => r.retailer);
+  return db.prepare(`SELECT retailer, COALESCE(MAX(merchant_name), CASE retailer WHEN 'amazon' THEN 'Amazon' ELSE retailer END) AS name
+                     FROM orders GROUP BY retailer ORDER BY name`).all();
 }
 
 export function dashboard(db, today = todayISO()) {

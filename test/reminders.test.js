@@ -176,7 +176,8 @@ test('scheduler: syncs only when due, never auto-reviews unless you turn it on, 
   const db = setup();
   saveAccount(db, { email: 'me@example.com', tokens: { refresh_token: 'r', access_token: 'a', expires_in: 3600, scope: 's' } });
   let listed = 0;
-  const gmail = { listMessageIds: async () => { listed++; return []; }, getMessage: async () => null };
+  // Count syncs by the Amazon search (each sync also searches "other stores").
+  const gmail = { listMessageIds: async (q) => { if (q.startsWith('from:amazon.com')) listed++; return []; }, getMessage: async () => null };
   let aiCalls = 0;
   const ai = { beta: { messages: { create: async () => { aiCalls++; return { stop_reason: 'end_turn', content: [] }; } } } };
   let clock = new Date('2026-10-31T12:00:00Z');

@@ -3,14 +3,14 @@
 // deadline, the AI result becomes a suggestion instead of overwriting yours.
 
 import { todayISO } from '../lib/dates.js';
-import { buildRequest, runReview, verifyItemResult, unreviewedResult, RETAILER_POLICY_SOURCES } from '../ai/policyReview.js';
+import { buildRequest, runReview, verifyItemResult, unreviewedResult, policySourceFor } from '../ai/policyReview.js';
 import { applyPolicyResult, addEvent } from './items.js';
 
 const BATCH = 8; // items per AI request — one policy lookup serves several items
 let running = false;
 export const isReviewing = () => running;
 
-const ITEM_SQL = `SELECT i.*, o.retailer, o.order_date FROM items i JOIN orders o ON o.id = i.order_id`;
+const ITEM_SQL = `SELECT i.*, o.retailer, o.order_date, o.merchant_name FROM items i JOIN orders o ON o.id = i.order_id`;
 
 /** Real (non-sample) items that are still undecided or in a return and have no AI/user policy yet. */
 export function itemsNeedingReview(db) {
@@ -33,7 +33,7 @@ export async function reviewPolicies(db, { client, itemIds, today = todayISO() }
     const byRetailer = new Map();
     for (const it of items) {
       if (it.is_sample) { summary.skipped++; continue; } // never send made-up sample items to the AI
-      if (!RETAILER_POLICY_SOURCES[it.retailer]) { summary.skipped++; continue; }
+      if (!policySourceFor(it.retailer, it.merchant_name)) { summary.skipped++; continue; }
       if (!byRetailer.has(it.retailer)) byRetailer.set(it.retailer, []);
       byRetailer.get(it.retailer).push(it);
     }
@@ -42,7 +42,7 @@ export async function reviewPolicies(db, { client, itemIds, today = todayISO() }
       for (let i = 0; i < list.length; i += BATCH) {
         const batch = list.slice(i, i + BATCH);
         const userUrls = [...new Set(batch.map((b) => b.policy_user_url).filter(Boolean))];
-        const { params, domains } = buildRequest({ retailer, items: batch, userUrls, today });
+        const { params, domains } = buildRequest({ retailer, merchantName: batch[0].merchant_name, items: batch, userUrls, today });
         const { submission, fetched } = await runReview(client, params);
         const byRef = new Map((submission?.items ?? []).map((r) => [String(r.ref), r]));
 

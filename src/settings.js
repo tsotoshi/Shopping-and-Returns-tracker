@@ -17,6 +17,8 @@ export const SETTINGS = {
   ntfyServer: { key: 'ntfy_server', type: 'string', pattern: /^https:\/\/[^\s/]+(\/[^\s]*)?$/, default: 'https://ntfy.sh', hint: 'an https:// address' },
   pushIncludeNames: { key: 'push_include_names', type: 'bool', default: false }, // item names in phone notifications
   emailEnabled: { key: 'email_enabled', type: 'bool', default: false },
+  // Optional: real Amazon product names/prices/return dates via the amazon-orders helper
+  amazonSiteEnabled: { key: 'amazon_site_enabled', type: 'bool', default: false },
 };
 
 export class SettingsError extends Error {}

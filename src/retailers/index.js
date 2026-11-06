@@ -4,6 +4,7 @@
 // plus a parser file; the sync and import code don't change.
 
 import { parseAmazonEmails, PARSER_VERSION, isFromAmazon } from './amazon.js';
+import { parseGenericEmails, GENERIC_PARSER_VERSION } from './generic.js';
 
 export const RETAILERS = {
   amazon: {
@@ -15,6 +16,15 @@ export const RETAILERS = {
     parse: parseAmazonEmails, // returns one parsed email per order (an email can hold several)
     parserVersion: PARSER_VERSION,
     isFrom: isFromAmazon,
+  },
+  // Every other store. Gmail's own "Purchases" category does most of the
+  // finding; promotions and social mail are excluded.
+  other: {
+    id: 'other',
+    name: 'Other stores',
+    gmailQuery: '(category:purchases OR subject:(order OR shipped OR delivered OR refund OR return OR receipt)) -from:amazon.com -category:promotions -category:social',
+    parse: parseGenericEmails,
+    parserVersion: GENERIC_PARSER_VERSION,
   },
 };
 

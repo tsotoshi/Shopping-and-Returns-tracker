@@ -53,6 +53,33 @@ The app creates reminders when a return deadline is near (default: 3 days before
 
 **Background checks** run every 15 minutes while the app is running: Gmail sync when due (default every 6 hours, adjustable or off), optional automatic AI reviews (off by default, since they cost money), then reminders. On a computer that's asleep, nothing runs until it wakes up.
 
+## Other stores
+
+Besides Amazon, sync looks for order emails from **any store**, using Gmail's own *Purchases* category plus order-related subject words, and skipping promotions. For each email:
+- **Best case:** the store includes a standard machine-readable order summary (schema.org, the data Gmail uses for order "highlights"), which gives items, prices and status.
+- **Otherwise:** general rules (subject wording, "Order #…", "Quantity:" lines). Emails with no order number are skipped, and listed in Settings → *Emails the app skipped*.
+- **Not shopping:** rides, food delivery, banks, payment apps and subscriptions are ignored. Any store can be turned off with *Stop tracking* on one of its items.
+- **Return policies:** the AI review reads each store's policy on that store's own website.
+
+## Amazon order details (optional)
+
+Amazon's emails often give only a category ("Household Supplies") and an order total. If you turn this on, the app uses the open-source [amazon-orders](https://github.com/alexdlaird/amazon-orders) tool to read your **Amazon order pages** during each sync and fill in real **product names, prices, sellers and Amazon's own return dates** (shown as *Confirmed*). Orders no email covered are added too. Emails remain the source for returns and refunds.
+
+Setup (one time):
+1. Install Python from **python.org**. That installer doesn't need Apple's developer tools.
+2. In the app folder:
+   ```bash
+   python3 -m venv .venv
+   .venv/bin/pip install "amazon-orders[browser]==5.2.1"
+   .venv/bin/amazon-orders login --browser
+   ```
+   The last command opens a browser window to sign in to Amazon. Your password is never stored, only the session, on your computer.
+3. Restart the app, then turn it on in Settings → *Amazon order details*.
+
+What to know: it only reads your order history, but the saved session is a full Amazon sign-in kept on your computer (like staying logged in to a browser). Amazon doesn't officially support tools like this, so you may occasionally see extra security checks, and it can stop working until updated when Amazon changes its site. To revoke it: Amazon → *Your Account* → *Sign out of all devices*. When the session expires, the app shows an alert with the one command to run again.
+
+How names are matched: by Amazon item ID or shared words first. If an order's items can't be told apart (category names with no shared words), real names are still filled in, with a note to swap with *Rename* if needed. This is never done for items with a return in progress. Your own renames are never overwritten.
+
 ## Use it from your phone
 
 By default the app only accepts connections from the computer it runs on. To open it from your phone on the same Wi-Fi, set `APP_PASSWORD=something-long` in `.env` and restart. Then visit `http://<your-computer's-IP>:3000` and log in with any username and that password. Connect Gmail from the computer itself (Google only redirects back to `localhost`); after that, syncing works from the phone.
@@ -85,8 +112,11 @@ src/
     account.js      stores/refreshes the token in the local database
     client.js       read-only Gmail API calls + email decoding
   retailers/
-    index.js        registry: Gmail search + parser per retailer
+    index.js        registry: Gmail search + parser per store group
     amazon.js       Amazon email parser
+    generic.js      every other store (schema.org markup, then general rules)
+  integrations/amazonSite.js  optional Amazon order-page details (amazon-orders)
+tools/amazon_orders_bridge.py  the small Python helper the app runs for that
   services/sync.js  "Sync emails": fetch → skip seen → parse → import
   ai/policyReview.js  what's sent to the AI, its rules, and quote verification
   services/policyReviews.js  batches items, saves verified results

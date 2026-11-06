@@ -75,7 +75,7 @@ test('skipped emails are recorded with subject and reason', async () => {
   saveAccount(db, { email: 'me@example.com', tokens: { refresh_token: 'r', access_token: 'a', expires_in: 3600, scope: 's' } });
   const promo = gmailMessage({ id: 'p1', subject: 'Deals on household supplies', html: '<p>Sale</p>' });
   await syncGmail(db, { client: fakeGmail([promo]) });
-  const row = db.prepare('SELECT subject, reason, parser_version FROM skipped_messages').get();
+  const row = db.prepare("SELECT subject, reason, parser_version FROM skipped_messages WHERE provider = 'gmail:amazon'").get();
   assert.equal(row.subject, 'Deals on household supplies');
   assert.match(row.reason, /not an order/);
   assert.equal(row.parser_version, 2);

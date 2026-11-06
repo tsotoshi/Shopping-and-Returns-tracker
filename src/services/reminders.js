@@ -7,6 +7,7 @@ import { getSettings } from '../db.js';
 import { addDays, daysBetween, todayISO } from '../lib/dates.js';
 import { refundBucket, outstandingCents } from '../lib/refunds.js';
 import { getAccount } from '../gmail/account.js';
+import { lastAmazonSiteRun } from '../integrations/amazonSite.js';
 
 const money = (c) => `$${((c ?? 0) / 100).toFixed(2)}`;
 const when = (date, today) => {
@@ -83,6 +84,16 @@ export function computeReminders(db, today = todayISO()) {
       title: 'Reconnect Gmail',
       body: "Gmail access expired, so new emails aren't being imported. Open Settings and tap Reconnect.",
       privateBody: 'Gmail access expired. Open the app and reconnect.',
+    });
+  }
+  // Amazon order pages need you to sign in again
+  const amazon = lastAmazonSiteRun(db);
+  if (s.amazonSiteEnabled && amazon && !amazon.ok && amazon.error === 'signin_required') {
+    out.push({
+      itemId: null, isSample: false, kind: 'amazon_signin', key: `amazon-signin:${String(amazon.at).slice(0, 10)}`,
+      title: 'Sign in to Amazon again',
+      body: 'Amazon order details (product names and return dates) are paused until you sign in again. See Settings for the one command to run.',
+      privateBody: 'Amazon sign-in expired. Open the app for the fix.',
     });
   }
   return out;

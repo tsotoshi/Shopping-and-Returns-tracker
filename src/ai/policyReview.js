@@ -31,6 +31,18 @@ export const RETAILER_POLICY_SOURCES = {
   },
 };
 
+/** Where to look for a store's policy: a configured source, or the store's own domain. */
+export function policySourceFor(retailer, merchantName) {
+  if (RETAILER_POLICY_SOURCES[retailer]) return RETAILER_POLICY_SOURCES[retailer];
+  if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(retailer ?? '')) return null;
+  const name = merchantName || retailer;
+  return {
+    name,
+    domains: [retailer],
+    searchHint: `${name}'s official return policy on ${retailer}, including item exceptions, marketplace or third-party seller returns, and any holiday return extension`,
+  };
+}
+
 const SYSTEM_PROMPT = `You review official retailer return policies for a personal purchase tracker.
 
 Your job: for each item, find the retailer's official return policy that applies and report the rules through the submit_policy_review tool.
@@ -116,8 +128,8 @@ export function hostAllowed(url, domains) {
   }
 }
 
-export function buildRequest({ retailer, items, userUrls = [], today }) {
-  const src = RETAILER_POLICY_SOURCES[retailer];
+export function buildRequest({ retailer, merchantName, items, userUrls = [], today }) {
+  const src = policySourceFor(retailer, merchantName);
   if (!src) throw new Error(`No policy source configured for retailer "${retailer}"`);
   const extraDomains = userUrls.map((u) => new URL(u).hostname.replace(/^www\./, ''));
   const domains = [...new Set([...src.domains, ...extraDomains])];

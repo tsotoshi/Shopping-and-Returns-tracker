@@ -93,7 +93,7 @@ export function parseItems(lines) {
   return items;
 }
 
-function paymentMethod(text) {
+export function paymentMethod(text) {
   const card = text.match(/\b(Visa|Mastercard|MasterCard|American Express|Amex|Discover)\b[^\d\n]{0,25}(\d{4})\b/);
   if (card) return `${card[1].replace('MasterCard', 'Mastercard').replace('American Express', 'Amex')} ••${card[2]}`;
   const other = text.match(/\b(gift card balance|Amazon gift card|original payment method|Amazon Pay balance)\b/i);
@@ -130,7 +130,7 @@ function safeLinks(links, re) {
   })?.href ?? null;
 }
 
-function instructions(lines) {
+export function instructions(lines) {
   const picked = lines.filter((l) => /\b(drop[- ]?off|bring|print|pack|tape|qr code|no box|label|ups|whole foods|kohl|locker)\b/i.test(l) && l.length > 25 && l.length < 220);
   return picked.length ? picked.slice(0, 3).join(' ').slice(0, 400) : null;
 }
@@ -216,7 +216,7 @@ const TOTAL_NOTE = "Price is the order's grand total (includes tax and shipping)
 function readOrder(lines, { kind, subject, date }) {
   let items = parseItems(lines);
   if (!items.length) {
-    items = parseCategoryItems(lines).map((it) => ({ ...it, unitPriceCents: null, seller: null, note: CATEGORY_NOTE }));
+    items = parseCategoryItems(lines).map((it) => ({ ...it, unitPriceCents: null, seller: null, note: CATEGORY_NOTE, categoryName: true }));
   }
   const subj = subjectItem(subject);
   if (!items.length && subj.name) items = [{ name: subj.name, quantity: kind === 'order_confirmation' ? 1 : undefined }];

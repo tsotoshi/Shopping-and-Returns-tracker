@@ -61,3 +61,8 @@ test('drop-off deadline: email date beats policy calculation', () => {
   assert.equal(calc.status, 'estimated');
   assert.equal(computeDropoffDeadline({ policy: { ...policy, dropoffDays: null }, returnStartedAt: '2026-11-01' }).status, 'needs_review');
 });
+
+test('a retailer-stated "return through" date is used as-is', () => {
+  const r = computeReturnDeadline({ policy: { fixedReturnBy: '2026-12-05', confidence: 'confirmed', fixedReturnBasis: 'Amazon order page' }, orderDate: '2026-11-01' });
+  assert.deepEqual([r.date, r.status, r.eligibility, r.basis], ['2026-12-05', 'confirmed', 'eligible', 'Amazon order page']);
+});

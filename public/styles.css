@@ -83,3 +83,4 @@ h3 { font-size: 16px; }
 .skip { padding: 8px 0; border-top: 1px solid var(--line); }
 details.card > summary { font-weight: 600; }
 .count[hidden] { display: none; }
+pre.cmd { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 10px; overflow-x: auto; font-size: 13px; white-space: pre; }

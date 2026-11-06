@@ -81,7 +81,32 @@ export function extractLinks(html) {
   return links;
 }
 
-/** Gmail API message -> { id, threadId, subject, from, receivedAt, date, text, links } */
+/**
+ * Many stores embed a machine-readable order summary (schema.org JSON-LD,
+ * the same data Gmail uses for its order "highlights"). Pull those out.
+ */
+export function extractStructuredData(html) {
+  const out = [];
+  const re = /<script[^>]*type\s*=\s*["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi;
+  let m;
+  while ((m = re.exec(html))) {
+    try {
+      const data = JSON.parse(m[1].trim());
+      const queue = Array.isArray(data) ? [...data] : [data];
+      while (queue.length) {
+        const node = queue.shift();
+        if (!node || typeof node !== 'object') continue;
+        if (Array.isArray(node['@graph'])) queue.push(...node['@graph']);
+        if (node['@type']) out.push(node);
+      }
+    } catch {
+      // Malformed markup: ignore it, the text parser still runs.
+    }
+  }
+  return out;
+}
+
+/** Gmail API message -> { id, threadId, subject, from, receivedAt, date, text, links, structured } */
 export function decodeMessage(msg) {
   const headers = Object.fromEntries((msg.payload?.headers ?? []).map((h) => [h.name.toLowerCase(), h.value]));
   const out = { text: [], html: [] };
@@ -100,6 +125,7 @@ export function decodeMessage(msg) {
     date: todayISO(new Date(ms)), // local calendar date the email arrived
     text,
     links: html ? extractLinks(html) : [],
+    structured: html ? extractStructuredData(html) : [],
   };
 }
 

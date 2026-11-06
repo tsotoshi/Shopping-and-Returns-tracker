@@ -27,6 +27,10 @@ export function computeReturnDeadline({ policy, orderDate, deliveredDate, estima
   if (!policy) {
     return { date: null, status: 'needs_review', eligibility: 'unknown', basis: 'No return policy reviewed yet.' };
   }
+  // A retailer's own "return eligible through <date>" for this exact item beats any calculation.
+  if (policy.fixedReturnBy) {
+    return { date: policy.fixedReturnBy, status: policy.confidence ?? 'confirmed', eligibility: 'eligible', basis: policy.fixedReturnBasis ?? `The retailer says this item can be returned through ${policy.fixedReturnBy}.` };
+  }
   if (policy.eligible === false) {
     return { date: null, status: policy.confidence ?? 'needs_review', eligibility: 'not_eligible', basis: 'Policy says this item is not returnable.' };
   }

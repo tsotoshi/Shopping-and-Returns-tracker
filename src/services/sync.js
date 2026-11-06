@@ -25,9 +25,14 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
   // Already imported (an email with several orders is stored as "<id>#<order>"), or
   // skipped by the CURRENT parser version. Emails skipped by an older parser are re-checked.
   const imported = db.prepare("SELECT 1 FROM emails WHERE provider = 'gmail' AND (message_id = @id OR message_id LIKE @prefix)");
-  const skippedNow = db.prepare("SELECT 1 FROM skipped_messages WHERE provider = 'gmail' AND message_id = @id AND parser_version = @v");
+  // Each store group remembers its own skips ("gmail:amazon", "gmail:other").
+  const skippedNow = db.prepare('SELECT 1 FROM skipped_messages WHERE provider = @p AND message_id = @id AND parser_version = @v');
   const skip = db.prepare(`INSERT OR REPLACE INTO skipped_messages (provider, message_id, reason, subject, from_addr, received_at, parser_version)
-                           VALUES ('gmail', @id, @reason, @subject, @from, @receivedAt, @v)`);
+                           VALUES (@p, @id, @reason, @subject, @from, @receivedAt, @v)`);
+  const importedThisRun = new Set(); // once a store group imports an email, others leave it alone
+  const foundIds = new Set();
+  const counted = new Set(); // each email counts once in the summary, even if two store groups look at it
+  const once = (id, key) => { if (counted.has(id)) return; counted.add(id); c[key]++; };
   const errors = [];
 
   try {
@@ -40,20 +45,30 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
       if (!r.parse) continue;
       const q = `${r.gmailQuery} ${since ? `after:${since.replace(/-/g, '/')}` : `newer_than:${firstSyncDays}d`}`;
       const ids = (await client.listMessageIds(q, maxMessages)).reverse(); // oldest first: orders before deliveries
-      c.found += ids.length;
+      for (const id of ids) foundIds.add(id);
+      c.found = foundIds.size;
       const v = r.parserVersion ?? 1;
+      const p = `gmail:${r.id}`;
       for (const id of ids) {
-        if (imported.get({ id, prefix: `${id}#%` }) || skippedNow.get({ id, v })) { c.already_had++; continue; }
+        if (importedThisRun.has(id)) continue;
+        if (imported.get({ id, prefix: `${id}#%` }) || skippedNow.get({ p, id, v })) { once(id, 'already_had'); continue; }
         try {
           const msg = decodeMessage(await client.getMessage(id));
           const results = [].concat(r.parse(msg) ?? []);
           if (!results.length) {
             const reason = r.isFrom && !r.isFrom(msg.from) ? 'not from a verified retailer address' : 'not an order, shipping, return, or refund email';
-            skip.run({ id, reason, subject: msg.subject, from: msg.from, receivedAt: msg.receivedAt, v });
-            c.ignored++;
+            skip.run({ p, id, reason, subject: msg.subject, from: msg.from, receivedAt: msg.receivedAt, v });
+            once(id, 'ignored');
             continue;
           }
-          db.prepare("DELETE FROM skipped_messages WHERE provider = 'gmail' AND message_id = ?").run(id);
+          const ignoredStore = db.prepare('SELECT 1 FROM ignored_stores WHERE domain = ?').get(results[0].retailer);
+          if (ignoredStore) {
+            skip.run({ p, id, reason: 'you chose to stop tracking this store', subject: msg.subject, from: msg.from, receivedAt: msg.receivedAt, v });
+            once(id, 'ignored');
+            continue;
+          }
+          db.prepare("DELETE FROM skipped_messages WHERE provider LIKE 'gmail%' AND message_id = ?").run(id);
+          importedThisRun.add(id);
           let anyNew = false;
           let anyReview = false;
           for (const parsed of results) {
@@ -62,12 +77,13 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
             if (res.status === 'imported') anyNew = true;
             else if (res.status !== 'duplicate') { anyReview = true; if (res.itemIds.length) anyNew = true; }
           }
+          counted.add(id);
           if (anyNew) c.imported++;
           if (anyReview) c.needs_review++;
           if (!anyNew && !anyReview) c.already_had++;
         } catch (e) {
           if (e.reconnect || e.status === 401) throw e; // stop the whole sync
-          c.failed++;
+          once(id, 'failed');
           errors.push(e.message);
         }
       }

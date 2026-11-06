@@ -10,6 +10,7 @@ const money = (c) => (c == null ? '—' : `$${(c / 100).toFixed(2)}`);
 const dollars = (c) => (c == null ? '' : (c / 100).toFixed(2));
 const RETAILERS = { amazon: 'Amazon' };
 const store = (r) => RETAILERS[r] ?? r;
+const storeName = (i) => i.merchant_name || store(i.retailer);
 
 function niceDate(iso) {
   if (!iso) return '—';
@@ -58,7 +59,7 @@ function stageBadge(item) {
 function itemCard(i, extra = '') {
   return `<a class="card link" href="#/item/${i.id}">
     <div class="row"><div class="grow"><div class="title">${esc(i.name)}${i.quantity > 1 ? ` <span class="muted">×${i.quantity}</span>` : ''}</div>
-    <div class="muted small">${esc(store(i.retailer))} · #${esc(i.order_number)}${i.seller ? ` · sold by ${esc(i.seller)}` : ''}</div></div>
+    <div class="muted small">${esc(storeName(i))} · #${esc(i.order_number)}${i.seller ? ` · sold by ${esc(i.seller)}` : ''}</div></div>
     ${stageBadge(i)}</div>${extra ? `<div class="small" style="margin-top:6px">${extra}</div>` : ''}${i.is_sample ? '<div style="margin-top:6px"><span class="badge sample">Sample</span></div>' : ''}
   </a>`;
 }
@@ -71,7 +72,7 @@ function refundCheckCard(i, today) {
   const label = { overdue: '<span class="badge bad">Overdue</span>', problem: '<span class="badge bad">Problem reported</span>', check: '<span class="badge warn">Time to check</span>' }[i.bucket] ?? '';
   return `<div class="card">
     <div class="row"><div class="grow"><a href="#/item/${i.id}" class="title">${esc(i.name)}</a>
-    <div class="muted small">${esc(store(i.retailer))} · to ${esc(i.destination ?? 'your payment method')}</div></div>${label}</div>
+    <div class="muted small">${esc(storeName(i))} · to ${esc(i.destination ?? 'your payment method')}</div></div>${label}</div>
     <div class="small" style="margin-top:6px">Expected ${money(i.expected_cents)} · issued by retailer ${money(i.issued_cents)} · you've confirmed ${money(i.confirmed_cents)}
     ${i.window_end ? `<br>Expected to post by ${niceDate(i.window_end)} (${relDays(i.window_end, today)})` : ''}</div>
     <p class="small muted" style="margin:6px 0 0">Please check your payment account. A "refund issued" email doesn't mean the money has arrived.</p>
@@ -135,6 +136,7 @@ function syncSummary(r) {
   if (r.ignored) parts.push(`${r.ignored} not order-related`);
   if (r.needs_review) parts.push(`${r.needs_review} need a look`);
   if (r.failed) parts.push(`${r.failed} failed`);
+  if (r.amazonSite) parts.push(r.amazonSite.ok ? `Amazon details: ${r.amazonSite.named + r.amazonSite.created} item${r.amazonSite.named + r.amazonSite.created === 1 ? '' : 's'} updated` : `Amazon details: ${amazonError(r.amazonSite.error)}`);
   return parts.join(' · ');
 }
 
@@ -159,6 +161,36 @@ async function runSync(btn, after) {
     btn.textContent = 'Sync emails';
     after();
   }
+}
+
+// ---------- Amazon order pages ----------
+function amazonError(code) {
+  return { signin_required: 'Amazon needs you to sign in again (see Settings)', not_installed: 'helper not installed (see Settings)', amazon_error: 'Amazon returned an error — try again later', bridge_failed: "the helper couldn't run (see Settings)", unexpected: 'something unexpected went wrong' }[code] ?? code;
+}
+
+function amazonSiteCard(a, s) {
+  const last = a.last;
+  const steps = `<ol class="small steps">
+      <li>Install Python from <strong>python.org</strong> (Downloads → macOS). It doesn't need Apple's developer tools.</li>
+      <li>In Terminal, in the app's folder, run these one at a time:
+        <pre class="cmd">python3 -m venv .venv
+.venv/bin/pip install "amazon-orders[browser]==5.2.1"
+.venv/bin/amazon-orders login --browser</pre>
+        The last one opens a browser window: sign in to Amazon there. Your password isn't saved — only the sign-in session, on this computer.</li>
+      <li>Restart the app (<code>Ctrl + C</code>, then <code>npm start</code>) and come back here.</li>
+    </ol>`;
+  if (!a.available) {
+    return `<p class="small">Amazon's emails often leave out product names and prices. With your permission, the app can read your <strong>Amazon order pages</strong> during each sync to fill in real names, prices, sellers, and Amazon's own return dates.</p>
+      <details><summary class="small">Set it up (about 5 minutes, one time)</summary>${steps}
+      <p class="small muted">What to know: this uses the open-source amazon-orders tool. It only reads your order history. Amazon doesn't officially support tools like this, so you may occasionally see extra Amazon security checks, and it can stop working until updated when Amazon changes its site.</p></details>`;
+  }
+  return `<form class="settings-form">
+      <label class="check"><input type="checkbox" name="amazonSiteEnabled" ${s.amazonSiteEnabled ? 'checked' : ''}> <span>Fill in product names, prices and return dates from my Amazon order pages during sync</span></label>
+      <div class="actions"><button class="btn primary">Save</button>${s.amazonSiteEnabled ? '<button class="btn" type="button" id="amazon-now">Check Amazon now</button>' : ''}</div>
+    </form>
+    ${last ? `<p class="small ${last.ok ? 'muted' : ''}">Last check: ${new Date(last.at).toLocaleString()} — ${last.ok ? `${last.summary.orders} orders read, ${last.summary.named + last.summary.created} items updated, ${last.summary.returnDates} return dates added` : esc(amazonError(last.error))}</p>` : ''}
+    ${last && !last.ok && last.error === 'signin_required' ? '<div class="notice warn">Sign in again: in Terminal, in the app folder, run <code>.venv/bin/amazon-orders login --browser</code>, then tap Check Amazon now.</div>' : ''}
+    <details><summary class="small">Setup steps (for reference)</summary>${steps}</details>`;
 }
 
 // ---------- AI policy review ----------
@@ -226,7 +258,7 @@ async function renderItems() {
     <h1>Items</h1>
     <form class="filters" id="filters">
       <input name="q" type="search" placeholder="Search item, store, order #" value="${esc(params.get('q') ?? '')}">
-      <select name="store"><option value="">All stores</option>${d.stores.map((s) => `<option value="${esc(s)}" ${params.get('store') === s ? 'selected' : ''}>${esc(store(s))}</option>`).join('')}</select>
+      <select name="store"><option value="">All stores</option>${d.stores.map((s) => `<option value="${esc(s.retailer)}" ${params.get('store') === s.retailer ? 'selected' : ''}>${esc(s.name)}</option>`).join('')}</select>
       <select name="stage"><option value="">All statuses</option>${d.stages.map((s) => `<option value="${s.key}" ${params.get('stage') === s.key ? 'selected' : ''}>${esc(s.label)}</option>`).join('')}</select>
     </form>
     <p class="muted small">${d.items.length} item${d.items.length === 1 ? '' : 's'}</p>
@@ -264,10 +296,14 @@ async function renderItem(id) {
       <form id="rename" class="row"><input name="name" value="${esc(i.name)}" class="grow" aria-label="Item name" required><button class="btn">Save</button></form>
     </details>
     ${i.notes ? `<div class="notice">${esc(i.notes)}</div>` : ''}
+    ${i.name_source === 'amazon_site' ? '<p class="small muted" style="margin:4px 0">Name and details from your Amazon order page.</p>' : ''}
+    ${i.retailer !== 'amazon' && !i.is_sample ? `<details class="small"><summary>Not a store you want tracked?</summary>
+      <p class="muted">Future emails from ${esc(storeName(i))} (${esc(i.retailer)}) will be skipped. Items already here stay unless you remove them.</p>
+      <button class="btn danger" id="ignore-store" type="button">Stop tracking ${esc(storeName(i))}</button></details>` : ''}
     <div class="row wrap">${stageBadge(i)}${sampleBadge(i)}${i.quantity > 1 ? `<span class="badge">Qty ${i.quantity}</span>` : ''}${i.split_from_item_id ? '<span class="badge">Partial return line</span>' : ''}</div>
 
     <div class="card" style="margin-top:12px"><dl class="kv">
-      <dt>Store</dt><dd>${esc(store(i.retailer))}${i.seller ? ` — sold by ${esc(i.seller)} (third-party)` : ''}</dd>
+      <dt>Store</dt><dd>${esc(storeName(i))}${i.seller ? ` — sold by ${esc(i.seller)} (third-party)` : ''}</dd>
       <dt>Order</dt><dd>#${esc(i.order_number)}</dd>
       <dt>Price</dt><dd>${money(i.unit_price_cents)}${i.quantity > 1 ? ` each` : ''}</dd>
       <dt>Ordered</dt><dd>${niceDate(i.order_date)}</dd>
@@ -376,6 +412,7 @@ async function renderItem(id) {
   const reload = () => renderItem(id);
   const post = async (path, body, msg) => { try { await api(path, body); if (msg) toast(msg); reload(); } catch (e) { toast(e.message); } };
 
+  app.querySelector('#ignore-store')?.addEventListener('click', () => post('/stores/ignore', { domain: i.retailer, name: storeName(i) }, `Stopped tracking ${storeName(i)}`));
   app.querySelector('#rename')?.addEventListener('submit', (e) => { e.preventDefault(); post(`/items/${id}/rename`, Object.fromEntries(new FormData(e.target)), 'Renamed'); });
   app.querySelector('#stage').addEventListener('change', (e) => post(`/items/${id}/stage`, { stage: e.target.value }, 'Stage updated'));
   app.querySelectorAll('[data-stage]').forEach((b) => b.addEventListener('click', () => post(`/items/${id}/stage`, { stage: b.dataset.stage }, 'Stage updated')));
@@ -421,6 +458,7 @@ async function renderSettings() {
   const [s, status, d] = await Promise.all([api('/settings'), api('/status'), api('/dashboard')]);
   const gmailMsg = new URLSearchParams(location.hash.split('?')[1] ?? '').get('gmail');
   const skipped = status.gmail.email ? (await api('/gmail/skipped')).skipped : [];
+  const ignored = (await api('/stores/ignored')).stores;
   app.innerHTML = `
     <h1>Settings</h1>
 
@@ -436,7 +474,7 @@ async function renderSettings() {
     <h2>Connections</h2>
     <div class="card"><dl class="kv">
       <dt>AI review</dt><dd>${status.ai.configured ? `<span class="badge ok">Set up</span> <span class="small muted">${status.ai.pending} item${status.ai.pending === 1 ? '' : 's'} waiting for review</span>` : '<span class="badge">Not set up</span> <span class="small muted">Add <code>ANTHROPIC_API_KEY</code> to <code>.env</code> and restart.</span>'}</dd>
-      <dt>Retailers</dt><dd>${status.retailers.map((r) => `${esc(r.name)} ${r.parserReady ? '' : '<span class="small muted">(email parser in Stage 2)</span>'}`).join(', ')}</dd>
+      <dt>Stores</dt><dd>Amazon, plus other stores' order emails (from Gmail's Purchases category)</dd>
     </dl></div>
 
     <h2>Sample data</h2>
@@ -454,6 +492,10 @@ async function renderSettings() {
       <p class="small muted">Background checks only run while the app is running on your computer. ${status.background?.lastRunAt ? `Last run: ${new Date(status.background.lastRunAt).toLocaleString()}${status.background.last?.errors?.length ? ` — ${esc(status.background.last.errors[0])}` : ''}.` : ''}</p>
       <div class="actions"><button class="btn primary">Save</button><button class="btn" type="button" id="run-now">Run checks now</button></div>
     </form>
+
+    <h2>Amazon order details</h2>
+    <div class="card">${amazonSiteCard(status.amazonSite, s)}</div>
+    ${ignored.length ? `<h2>Stores you stopped tracking</h2><div class="card">${ignored.map((st) => `<div class="row skip"><span class="small grow">${esc(st.name)} <span class="muted">(${esc(st.domain)})</span></span><button class="btn" type="button" data-unignore="${esc(st.domain)}">Track again</button></div>`).join('')}</div>` : ''}
 
     <h2>Notifications</h2>
     <div class="card">
@@ -507,6 +549,15 @@ async function renderSettings() {
     </div>
   `;
   document.getElementById('sync-now')?.addEventListener('click', (e) => runSync(e.target, renderSettings));
+  document.getElementById('amazon-now')?.addEventListener('click', async (e) => {
+    e.target.disabled = true; e.target.textContent = 'Checking Amazon… (up to a minute)';
+    try {
+      const r = await api('/amazon-site/run', {});
+      toast(r.ok ? `Amazon: ${r.orders} orders read, ${r.named + r.created} items updated, ${r.returnDates} return dates added` : amazonError(r.error));
+    } catch (err) { toast(err.message); }
+    renderSettings();
+  });
+  app.querySelectorAll('[data-unignore]').forEach((b) => b.addEventListener('click', async () => { await api('/stores/unignore', { domain: b.dataset.unignore }); toast('Tracking again'); renderSettings(); }));
   document.getElementById('disconnect')?.addEventListener('click', async () => {
     if (!confirm('Disconnect Gmail? Your imported purchases will stay.')) return;
     await api('/gmail/disconnect', {});

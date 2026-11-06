@@ -5,3 +5,5 @@ data/
 *.sqlite-*
 tokens*.json
 client_secret*.json
+.venv/
+__pycache__/

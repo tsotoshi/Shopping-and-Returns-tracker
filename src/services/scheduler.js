@@ -14,11 +14,13 @@ import { syncGmail, isSyncing } from './sync.js';
 import { reviewPolicies, itemsNeedingReview, isReviewing } from './policyReviews.js';
 import { recordReminders } from './reminders.js';
 import { deliverPending } from '../notify/channels.js';
+import { lastAmazonSiteRun } from '../integrations/amazonSite.js';
 
 const sqliteUtc = (s) => new Date(String(s).replace(' ', 'T') + (String(s).endsWith('Z') ? '' : 'Z'));
 
 export function createScheduler(db, {
   gmailReady = () => false, // Gmail credentials configured?
+  amazonSite = () => null, // returns a function that runs the Amazon order-page check, or null if off
   makeGmailClient,
   aiReady = () => false,
   makeAiClient,
@@ -48,6 +50,17 @@ export function createScheduler(db, {
             if (e.reconnect || e.status === 401) db.prepare('UPDATE gmail_account SET needs_reconnect = 1 WHERE id = 1').run();
             out.errors.push(`Sync: ${e.message}`);
           }
+        }
+      }
+
+      // 1b. Optional Amazon order-page check, on the same schedule as Gmail
+      const runAmazon = amazonSite();
+      if (runAmazon && s.autoSyncHours > 0) {
+        const last = lastAmazonSiteRun(db);
+        const due = !last?.at || now() - new Date(last.at) >= s.autoSyncHours * 3600_000;
+        if (due) {
+          out.amazonSite = await runAmazon();
+          if (!out.amazonSite.ok) out.errors.push(`Amazon order pages: ${out.amazonSite.error}`);
         }
       }
 

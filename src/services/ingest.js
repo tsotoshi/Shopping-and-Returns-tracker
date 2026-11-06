@@ -75,11 +75,12 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
     // 2. Find or create the order (unique per retailer + order number).
     let order = null;
     if (parsed.orderNumber) {
-      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, payment_method, is_sample) VALUES (?, ?, ?, ?, ?)
+      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, payment_method, merchant_name, is_sample) VALUES (?, ?, ?, ?, ?, ?)
                   ON CONFLICT (retailer, order_number) DO UPDATE SET
                     order_date = COALESCE(orders.order_date, excluded.order_date),
-                    payment_method = COALESCE(orders.payment_method, excluded.payment_method)`)
-        .run(parsed.retailer, parsed.orderNumber, parsed.orderDate ?? null, parsed.paymentMethod ?? null, sample);
+                    payment_method = COALESCE(orders.payment_method, excluded.payment_method),
+                    merchant_name = COALESCE(orders.merchant_name, excluded.merchant_name)`)
+        .run(parsed.retailer, parsed.orderNumber, parsed.orderDate ?? null, parsed.paymentMethod ?? null, parsed.merchantName ?? null, sample);
       order = db.prepare('SELECT * FROM orders WHERE retailer = ? AND order_number = ?').get(parsed.retailer, parsed.orderNumber);
     }
 
@@ -111,10 +112,19 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
           continue;
         }
         const groups = productGroups(all);
+        // The order already has real names from your Amazon order page, and this
+        // email only gives a category: attach the email instead of duplicating items.
+        const siteRows = ei.categoryName ? all.filter((r) => r.name_source === 'amazon_site') : [];
+        if (siteRows.length && ['order_confirmation', 'shipped', 'delivered'].includes(parsed.kind)) {
+          const rowsToUpdate = parsed.kind === 'order_confirmation' ? siteRows : siteRows.filter((r) => stageRank(r.stage) < stageRank(EMAIL_KIND_STAGE[parsed.kind] ?? 'purchased'));
+          for (const row of rowsToUpdate) targets.push({ row, emailItem: {} });
+          continue;
+        }
         if (parsed.kind === 'order_confirmation' || parsed.kind === 'shipped' || parsed.kind === 'delivered' || !all.length) {
-          const id = db.prepare(`INSERT INTO items (order_id, name, email_name, retailer_item_id, seller, quantity, unit_price_cents, notes, is_sample)
-                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
-            .run(order.id, ei.name, ei.name, ei.retailerItemId ?? null, ei.seller ?? null, ei.quantity ?? 1, ei.unitPriceCents ?? null, ei.note ?? null, sample).lastInsertRowid;
+          const id = db.prepare(`INSERT INTO items (order_id, name, email_name, retailer_item_id, seller, quantity, unit_price_cents, notes, name_source, is_sample)
+                                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+            .run(order.id, ei.name, ei.name, ei.retailerItemId ?? null, ei.seller ?? null, ei.quantity ?? 1, ei.unitPriceCents ?? null, ei.note ?? null,
+              ei.categoryName ? 'email_category' : 'email', sample).lastInsertRowid;
           if (parsed.kind !== 'order_confirmation') addEvent(db, id, { kind: 'stage:purchased', occurredAt: order.order_date, source: 'system', detail: 'Item first seen in a later email (no order confirmation imported)' });
           targets.push({ row: getItem(db, id), emailItem: ei, created: true });
         } else if (groups.length === 1) {
@@ -142,6 +152,13 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
     if (parsed.kind === 'refund_issued' && targets.length > 1 && targets.some((t) => t.emailItem.refundCents == null)) {
       problems.push('Refund amount could not be split between items — please check each item\'s issued amount');
     }
+
+    // Several email lines can point at the same row; handle each row once.
+    const uniqueTargets = [];
+    const seenRows = new Set();
+    for (const t of targets) if (!seenRows.has(t.row.id)) { seenRows.add(t.row.id); uniqueTargets.push(t); }
+    targets.length = 0;
+    targets.push(...uniqueTargets);
 
     // 5. Apply the email's effects to each targeted item.
     const itemIds = [];

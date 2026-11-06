@@ -22,6 +22,7 @@ import { reviewPolicies, itemsNeedingReview, isReviewing, setPolicyLink } from '
 import { recordReminders, listNotifications, unreadCount, markRead } from './services/reminders.js';
 import { makeChannels, deliverPending, sendTest, emailConfig } from './notify/channels.js';
 import { createScheduler } from './services/scheduler.js';
+import { amazonSiteConfig, syncAmazonSite, lastAmazonSiteRun } from './integrations/amazonSite.js';
 
 // Turn AI API errors into plain-English messages (typed classes, not string matching).
 function aiErrorMessage(e) {
@@ -59,6 +60,7 @@ export function createApp(db, {
   makeAiClient = () => new Anthropic(),
   email = emailConfig(),
   notifyChannels = (settings) => makeChannels({ settings, fetchImpl, email }),
+  amazonSite = { config: amazonSiteConfig(), runner: undefined }, // runner overridable in tests
   now = () => new Date(),
 } = {}) {
   const app = express();
@@ -119,6 +121,7 @@ export function createApp(db, {
       syncing: isSyncing(),
     },
     ai: { configured: aiConfigured, reviewing: isReviewing(), pending: itemsNeedingReview(db).length },
+    amazonSite: { available: amazonSite.config.available, enabled: getSettings(db).amazonSiteEnabled, last: lastAmazonSiteRun(db) },
     notify: { push: !!getSettings(db).ntfyTopic, emailConfigured: email.configured, emailTo: email.configured ? email.to : null, unread: unreadCount(db) },
     background: app.locals.scheduler?.status() ?? null,
     retailers: Object.values(RETAILERS).map((r) => ({ id: r.id, name: r.name, parserReady: !!r.parse })),
@@ -151,7 +154,11 @@ export function createApp(db, {
     if (!google.configured) return res.status(400).json({ error: 'Gmail is not set up yet — see Settings.' });
     if (!acct) return res.status(400).json({ error: 'Connect Gmail in Settings first. Nothing was synced.' });
     try {
-      res.json(await syncGmail(db, { client: makeGmailClient() }));
+      const result = await syncGmail(db, { client: makeGmailClient() });
+      if (getSettings(db).amazonSiteEnabled && amazonSite.config.available) {
+        result.amazonSite = await syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() });
+      }
+      res.json(result);
     } catch (e) {
       if (e.reconnect || e.status === 401) {
         db.prepare('UPDATE gmail_account SET needs_reconnect = 1 WHERE id = 1').run();
@@ -188,6 +195,20 @@ export function createApp(db, {
         .map((r) => ({ ...r, web_link: gmailWebLink(r.message_id, acct?.email) })),
     };
   }));
+  // Stores you've chosen not to track (their future emails are skipped).
+  api.get('/stores/ignored', wrap(() => ({ stores: db.prepare('SELECT domain, name FROM ignored_stores ORDER BY name').all() })));
+  api.post('/stores/ignore', wrap((req) => {
+    const domain = String(req.body?.domain ?? '').toLowerCase();
+    if (!/^[a-z0-9-]+(\.[a-z0-9-]+)+$/.test(domain) || domain === 'amazon.com') throw new items.UserError('That store can\'t be ignored.');
+    db.prepare('INSERT OR IGNORE INTO ignored_stores (domain, name) VALUES (?, ?)').run(domain, req.body?.name ?? domain);
+    return { ok: true };
+  }));
+  api.post('/stores/unignore', wrap((req) => { db.prepare('DELETE FROM ignored_stores WHERE domain = ?').run(String(req.body?.domain ?? '')); return { ok: true }; }));
+
+  api.post('/amazon-site/run', async (req, res) => {
+    if (!amazonSite.config.available) return res.status(400).json({ error: 'The amazon-orders helper isn\'t installed yet — see the setup steps in Settings.' });
+    res.json(await syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() }));
+  });
   api.post('/gmail/disconnect', async (req, res) => {
     await disconnect(db, fetchImpl);
     res.json({ ok: true });
@@ -210,6 +231,9 @@ export function createApp(db, {
   const channelsNow = () => notifyChannels(getSettings(db));
   const scheduler = createScheduler(db, {
     gmailReady: () => google.configured,
+    amazonSite: () => (getSettings(db).amazonSiteEnabled && amazonSite.config.available
+      ? () => syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() })
+      : null),
     makeGmailClient,
     aiReady: () => aiConfigured,
     makeAiClient,

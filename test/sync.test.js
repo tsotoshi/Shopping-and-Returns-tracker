@@ -21,14 +21,16 @@ test('first sync imports; second sync skips everything without re-downloading', 
   assert.equal(r1.imported, 1);
   assert.equal(r1.ignored, 1);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM items').get().n, 2);
-  assert.match(gmail.calls.list[0], /newer_than:180d/);
+  const amazonQueries = () => gmail.calls.list.filter((q) => q.startsWith('from:amazon.com'));
+  assert.match(amazonQueries()[0], /newer_than:180d/);
+  assert.ok(gmail.calls.list.some((q) => q.startsWith('(category:purchases')), 'also searches other stores');
 
   const before = gmail.calls.get.length;
   const r2 = await syncGmail(db, { client: gmail });
   assert.equal(r2.imported, 0);
   assert.equal(r2.already_had, 2);
   assert.equal(gmail.calls.get.length, before, 'no messages downloaded again');
-  assert.match(gmail.calls.list[1], /after:\d{4}\/\d{2}\/\d{2}/);
+  assert.match(amazonQueries()[1], /after:\d{4}\/\d{2}\/\d{2}/);
   assert.equal(db.prepare('SELECT COUNT(*) n FROM items').get().n, 2);
 });
 
