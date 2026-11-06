@@ -27,13 +27,15 @@ export function amazonSiteConfig(env = process.env) {
 }
 
 /** Run the Python helper. Always resolves to { ok, orders? , error?, detail? }. */
-export function runBridge({ python, script, timeFilter = 'last30', timeoutMs = 180_000, spawnImpl = spawn }) {
+export function runBridge({ python, script, timeFilter = 'last30', skipDetails = [], timeoutMs = 300_000, spawnImpl = spawn }) {
   return new Promise((resolve) => {
     let out = '';
     let err = '';
     let child;
     try {
-      child = spawnImpl(python, [script, '--time-filter', timeFilter], { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs });
+      const args = [script, '--time-filter', timeFilter];
+      if (skipDetails.length) args.push('--skip-details', skipDetails.join(','));
+      child = spawnImpl(python, args, { stdio: ['ignore', 'pipe', 'pipe'], timeout: timeoutMs });
     } catch (e) {
       resolve({ ok: false, error: 'bridge_failed', detail: e.message });
       return;
@@ -150,10 +152,11 @@ export function applyAmazonOrders(db, orders, { today = todayISO() } = {}) {
       if (!o.order_number || o.cancelled) continue;
       summary.orders++;
       const orderDate = isoDate(o.order_placed_date);
-      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, order_total_cents, is_sample) VALUES ('amazon', ?, ?, ?, 0)
+      db.prepare(`INSERT INTO orders (retailer, order_number, order_date, order_total_cents, payment_method, is_sample) VALUES ('amazon', ?, ?, ?, ?, 0)
                   ON CONFLICT (retailer, order_number) DO UPDATE SET order_date = COALESCE(orders.order_date, excluded.order_date),
-                    order_total_cents = COALESCE(excluded.order_total_cents, orders.order_total_cents)`)
-        .run(o.order_number, orderDate, cents(o.grand_total));
+                    order_total_cents = COALESCE(excluded.order_total_cents, orders.order_total_cents),
+                    payment_method = COALESCE(orders.payment_method, excluded.payment_method)`)
+        .run(o.order_number, orderDate, cents(o.grand_total), o.payment_method ?? null);
       const order = db.prepare("SELECT * FROM orders WHERE retailer = 'amazon' AND order_number = ?").get(o.order_number);
       const orderUrl = o.order_details_link ? new URL(o.order_details_link, 'https://www.amazon.com').toString() : null;
       const site = siteItemsOf(o);
@@ -222,11 +225,20 @@ function saveRun(db, run) {
   db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value').run(LAST_KEY, JSON.stringify(run));
 }
 
+/** Amazon orders where every item already has a real (not grand-total) price: no need to load their detail pages again. */
+export function ordersWithPrices(db) {
+  return db.prepare(`SELECT o.order_number FROM orders o JOIN items i ON i.order_id = o.id
+                     WHERE o.retailer = 'amazon' AND o.is_sample = 0
+                     GROUP BY o.id
+                     HAVING SUM(CASE WHEN i.unit_price_cents IS NULL OR IFNULL(i.notes, '') LIKE '%grand total%' THEN 1 ELSE 0 END) = 0`)
+    .all().map((r) => r.order_number);
+}
+
 /** Fetch + merge. First run looks back 3 months; later runs the last 30 days. */
 export async function syncAmazonSite(db, { config = amazonSiteConfig(), runner = runBridge, today = todayISO() } = {}) {
   if (!config.available) return { ok: false, error: 'not_installed' };
   const first = !lastAmazonSiteRun(db)?.everSucceeded;
-  const res = await runner({ python: config.python, script: config.script, timeFilter: first ? 'months-3' : 'last30' });
+  const res = await runner({ python: config.python, script: config.script, timeFilter: first ? 'months-3' : 'last30', skipDetails: ordersWithPrices(db) });
   const at = new Date().toISOString();
   if (!res.ok) {
     saveRun(db, { ...(lastAmazonSiteRun(db) ?? {}), at, ok: false, error: res.error, detail: res.detail ?? null });

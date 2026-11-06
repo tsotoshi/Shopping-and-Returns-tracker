@@ -23,6 +23,10 @@ def emit(obj):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--time-filter", default="last30", choices=["last30", "months-3"])
+    # Item prices are only on each order's detail page (one extra page load per order),
+    # so fetch details just for orders still missing prices, and only a few per run.
+    parser.add_argument("--details-limit", type=int, default=15)
+    parser.add_argument("--skip-details", default="", help="comma-separated order numbers that already have prices")
     args = parser.parse_args()
 
     try:
@@ -48,8 +52,24 @@ def main():
             emit({"ok": False, "error": "signin_required"})
             return 0
         session.login()  # reuses the saved session; no password involved
-        orders = AmazonOrders(session).get_orders(time_filter=args.time_filter)
-        emit({"ok": True, "orders": [o.to_dict(exclude_none=True) for o in orders]})
+        amazon_orders = AmazonOrders(session)
+        orders = amazon_orders.get_orders(time_filter=args.time_filter)
+        skip = {s for s in args.skip_details.split(",") if s}
+        detailed = 0
+        for i, order in enumerate(orders):
+            if detailed >= args.details_limit:
+                break
+            needs_prices = any(item.price is None for item in (order.items or []))
+            if not needs_prices or order.cancelled or order.order_number in skip:
+                continue
+            try:
+                orders[i] = amazon_orders.get_order(order.order_number, clone=order)
+                detailed += 1
+            except AmazonOrdersAuthError:
+                raise
+            except AmazonOrdersError as e:
+                print(f"Could not load details for {order.order_number}: {e}", file=sys.stderr)
+        emit({"ok": True, "detailed": detailed, "orders": [o.to_dict(exclude_none=True) for o in orders]})
     except AmazonOrdersAuthError as e:
         emit({"ok": False, "error": "signin_required", "detail": str(e)})
     except AmazonOrdersError as e:

@@ -10,7 +10,7 @@ import { saveAccount } from '../src/gmail/account.js';
 import { syncGmail } from '../src/services/sync.js';
 import { ingestParsedEmail } from '../src/services/ingest.js';
 import { renameItem, getItem } from '../src/services/items.js';
-import { applyAmazonOrders, runBridge, syncAmazonSite, lastAmazonSiteRun } from '../src/integrations/amazonSite.js';
+import { applyAmazonOrders, runBridge, syncAmazonSite, lastAmazonSiteRun, ordersWithPrices } from '../src/integrations/amazonSite.js';
 import { computeReminders } from '../src/services/reminders.js';
 import { updateSettings } from '../src/settings.js';
 import { gmailMessage, fakeGmail, twoOrderHtml } from './helpers/gmail.js';
@@ -213,4 +213,17 @@ test('exact pairing when names share words', async () => {
     items: [{ title: 'Office Desk Organizer', price: 15 }, { title: 'Kitchen Timer, Digital', price: 8 }] }], { today: '2026-11-02' });
   const rows = db.prepare('SELECT name, email_name FROM items ORDER BY id').all();
   assert.deepEqual(rows, [{ name: 'Kitchen Timer, Digital', email_name: 'Kitchen & Dining' }, { name: 'Office Desk Organizer', email_name: 'Office Products' }]);
+});
+
+test('only orders still missing prices get their detail pages loaded', async () => {
+  const db = await emailFirst(); // one Amazon order has a real price from the email? no: grand-total stand-in and one with none
+  assert.deepEqual(ordersWithPrices(db), [], 'grand-total stand-ins and missing prices both count as "needs prices"');
+  applyAmazonOrders(db, [{ order_number: '111-3646931-0001058', order_placed_date: '2026-11-05', payment_method: 'Visa ending in 4242',
+    items: [{ title: 'Yankee Candle Lavender Jar Candle', price: 9.99 }, { title: 'Bounty Paper Towels, 6 Double Rolls', price: 13.49 }] }], { today: '2026-11-07' });
+  assert.deepEqual(ordersWithPrices(db), ['111-3646931-0001058']);
+  assert.equal(db.prepare("SELECT payment_method FROM orders WHERE order_number = '111-3646931-0001058'").get().payment_method, 'Visa ending in 4242');
+
+  let args;
+  await runBridge({ python: 'py', script: 's', skipDetails: ordersWithPrices(db), spawnImpl: (cmd, a) => { args = a; return fakeSpawn({ stdout: '{"ok":true,"orders":[]}' })(); } });
+  assert.deepEqual(args, ['s', '--time-filter', 'last30', '--skip-details', '111-3646931-0001058']);
 });
