@@ -19,6 +19,9 @@ export const SETTINGS = {
   emailEnabled: { key: 'email_enabled', type: 'bool', default: false },
   // Optional: real Amazon product names/prices/return dates via the amazon-orders helper
   amazonSiteEnabled: { key: 'amazon_site_enabled', type: 'bool', default: false },
+  // AI reading of purchase emails the rules can't read (Claude Haiku 5.5)
+  aiEmailEnabled: { key: 'ai_email_enabled', type: 'bool', default: false },
+  aiMonthlyCapCents: { key: 'ai_monthly_cap_cents', type: 'int', min: 10, max: 5000, default: 100 }, // $1.00
 };
 
 export class SettingsError extends Error {}

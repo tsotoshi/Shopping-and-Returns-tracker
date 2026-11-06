@@ -61,7 +61,7 @@ Sync searches **all your mail** for order emails from any store, using Gmail's f
 - **Cheap first look:** for each match, the app reads only the sender, subject and Gmail's preview. It downloads the full email only if it looks like a purchase.
 - **Reading it:** first the store's standard order summary if it includes one (schema.org), then general rules. If the subject is unhelpful, the email's own text is checked for phrases like "Thank you for your order". Emails with no order number are skipped and listed in Settings → *Emails the app skipped*.
 - **Not shopping:** rides, food delivery, banks, payment apps, subscriptions, promotions and Amazon look-alike senders are ignored. Any store can be turned off with *Stop tracking*.
-- **No AI** reads your emails; it's all rules. When a store's format isn't recognized, it shows up in the skipped list so the rules can be improved.
+- **AI fallback (optional, off by default):** when the rules can't read an email that looks like a purchase, **Claude Haiku 5.5** can read it instead (Settings → *AI email reading*). Before sending, email addresses, phone numbers, card numbers and street addresses are removed. Every order number, item name and price the AI returns must appear in the email, or it's left out. Each email is read by AI at most once, there's a monthly limit (default $1), and Settings shows this month's spend. Expect roughly $0.50 per 1,000 emails. Needs `ANTHROPIC_API_KEY` in `.env`.
 
 ## Amazon order details (optional)
 

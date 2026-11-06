@@ -54,7 +54,8 @@ export function purchases(db) {
     amount_cents: r.unit_price_cents == null ? null : r.unit_price_cents * (r.quantity ?? 1),
     price_is_total: /grand total/i.test(r.notes ?? ''),
     stage_label: stageLabel(r.stage),
-    source: r.name_source === 'amazon_site' ? 'Amazon order page' : r.name_source === 'email_category' ? 'Email (category only)' : r.name_source === 'you' ? 'Renamed by you' : 'Email',
+    source: r.name_source === 'amazon_site' ? 'Amazon order page' : r.name_source === 'email_category' ? 'Email (category only)'
+      : r.name_source === 'email_ai' ? 'Email (read by AI)' : r.name_source === 'you' ? 'Renamed by you' : 'Email',
   }));
 }
 

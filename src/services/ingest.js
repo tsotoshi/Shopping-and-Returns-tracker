@@ -126,7 +126,7 @@ export function ingestParsedEmail(db, parsed, { isSample = false } = {}) {
           const id = db.prepare(`INSERT INTO items (order_id, name, email_name, retailer_item_id, seller, quantity, unit_price_cents, notes, name_source, is_sample)
                                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
             .run(order.id, ei.name, ei.name, ei.retailerItemId ?? null, ei.seller ?? null, ei.quantity ?? 1, ei.unitPriceCents ?? null, ei.note ?? null,
-              ei.categoryName ? 'email_category' : 'email', sample).lastInsertRowid;
+              ei.categoryName ? 'email_category' : ei.source === 'ai' ? 'email_ai' : 'email', sample).lastInsertRowid;
           if (parsed.kind !== 'order_confirmation') addEvent(db, id, { kind: 'stage:purchased', occurredAt: order.order_date, source: 'system', detail: 'Item first seen in a later email (no order confirmation imported)' });
           targets.push({ row: getItem(db, id), emailItem: ei, created: true });
         } else if (groups.length === 1) {

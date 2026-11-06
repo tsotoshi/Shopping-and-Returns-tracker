@@ -22,6 +22,7 @@ export function createScheduler(db, {
   gmailReady = () => false, // Gmail credentials configured?
   amazonSite = () => null, // returns a function that runs the Amazon order-page check, or null if off
   amazonFromSite = () => false, // Amazon purchases come from order pages (emails only for returns/refunds)
+  aiReader = () => null, // AI email reader (null when off)
   makeGmailClient,
   aiReady = () => false,
   makeAiClient,
@@ -46,7 +47,7 @@ export function createScheduler(db, {
         const due = !acct.last_sync_at || now() - sqliteUtc(acct.last_sync_at) >= s.autoSyncHours * 3600_000;
         if (due) {
           try {
-            out.sync = await syncGmail(db, { client: makeGmailClient(), amazonFromSite: amazonFromSite() });
+            out.sync = await syncGmail(db, { client: makeGmailClient(), amazonFromSite: amazonFromSite(), aiReader: aiReader() });
           } catch (e) {
             if (e.reconnect || e.status === 401) db.prepare('UPDATE gmail_account SET needs_reconnect = 1 WHERE id = 1').run();
             out.errors.push(`Sync: ${e.message}`);

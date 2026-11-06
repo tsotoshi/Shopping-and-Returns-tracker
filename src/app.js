@@ -23,6 +23,7 @@ import { recordReminders, listNotifications, unreadCount, markRead } from './ser
 import { makeChannels, deliverPending, sendTest, emailConfig } from './notify/channels.js';
 import { createScheduler } from './services/scheduler.js';
 import { amazonSiteConfig, syncAmazonSite, lastAmazonSiteRun } from './integrations/amazonSite.js';
+import { extractWithAI, aiToParsed, monthSpendCents } from './ai/emailExtract.js';
 
 // Turn AI API errors into plain-English messages (typed classes, not string matching).
 function aiErrorMessage(e) {
@@ -66,6 +67,17 @@ export function createApp(db, {
   const app = express();
   if (appPassword) app.use(passwordGate(appPassword));
   app.use(express.json());
+
+  // AI email reader, or null when it's off / not set up. Stops at your monthly cap.
+  const makeAiReader = () => {
+    if (!aiConfigured || !getSettings(db).aiEmailEnabled) return null;
+    const client = makeAiClient();
+    return async (msg) => {
+      if (monthSpendCents(db).cents >= getSettings(db).aiMonthlyCapCents) return { paused: true };
+      const ai = await extractWithAI(client, db, msg);
+      return { results: aiToParsed(ai, msg), note: ai.note };
+    };
+  };
 
   // ---- Gmail sign-in (OAuth) ----
   const pendingStates = new Map(); // random state -> expiry; blocks forged callbacks
@@ -120,7 +132,7 @@ export function createApp(db, {
       lastRun: lastSyncRun(db),
       syncing: isSyncing(),
     },
-    ai: { configured: aiConfigured, reviewing: isReviewing(), pending: itemsNeedingReview(db).length },
+    ai: { configured: aiConfigured, reviewing: isReviewing(), pending: itemsNeedingReview(db).length, emailMonth: monthSpendCents(db) },
     amazonSite: { available: amazonSite.config.available, enabled: getSettings(db).amazonSiteEnabled, last: lastAmazonSiteRun(db) },
     notify: { push: !!getSettings(db).ntfyTopic, emailConfigured: email.configured, emailTo: email.configured ? email.to : null, unread: unreadCount(db) },
     background: app.locals.scheduler?.status() ?? null,
@@ -158,7 +170,7 @@ export function createApp(db, {
       // Amazon order pages first (they create Amazon purchases), then emails.
       const amazonFromSite = getSettings(db).amazonSiteEnabled && amazonSite.config.available;
       const site = amazonFromSite ? await syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() }) : null;
-      const result = await syncGmail(db, { client: makeGmailClient(), amazonFromSite });
+      const result = await syncGmail(db, { client: makeGmailClient(), amazonFromSite, aiReader: makeAiReader() });
       if (site) result.amazonSite = site;
       res.json(result);
     } catch (e) {
@@ -234,6 +246,7 @@ export function createApp(db, {
   const scheduler = createScheduler(db, {
     gmailReady: () => google.configured,
     amazonFromSite: () => getSettings(db).amazonSiteEnabled && amazonSite.config.available,
+    aiReader: makeAiReader,
     amazonSite: () => (getSettings(db).amazonSiteEnabled && amazonSite.config.available
       ? () => syncAmazonSite(db, { config: amazonSite.config, runner: amazonSite.runner, today: today() })
       : null),

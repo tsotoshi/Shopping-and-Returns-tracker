@@ -136,6 +136,8 @@ function syncSummary(r) {
   if (r.ignored) parts.push(`${r.ignored} not order-related`);
   if (r.needs_review) parts.push(`${r.needs_review} need a look`);
   if (r.failed) parts.push(`${r.failed} failed`);
+  if (r.ai_read) parts.push(`${r.ai_read} read by AI`);
+  if (r.ai_paused) parts.push(`${r.ai_paused} waiting (AI monthly limit reached)`);
   if (r.amazonSite) parts.push(r.amazonSite.ok ? `Amazon details: ${r.amazonSite.named + r.amazonSite.created} item${r.amazonSite.named + r.amazonSite.created === 1 ? '' : 's'} updated` : `Amazon details: ${amazonError(r.amazonSite.error)}`);
   return parts.join(' · ');
 }
@@ -191,6 +193,26 @@ function amazonSiteCard(a, s) {
     ${last ? `<p class="small ${last.ok ? 'muted' : ''}">Last check: ${new Date(last.at).toLocaleString()} — ${last.ok ? `${last.summary.orders} orders read · ${last.summary.named + last.summary.created} names · ${last.summary.priced ?? 0} prices · ${last.summary.returnDates} return dates added` : esc(amazonError(last.error))}</p>` : ''}
     ${last && !last.ok && last.error === 'signin_required' ? '<div class="notice warn">Sign in again: in Terminal, in the app folder, run <code>.venv/bin/amazon-orders login --browser</code>, then tap Check Amazon now.</div>' : ''}
     <details><summary class="small">Setup steps (for reference)</summary>${steps}</details>`;
+}
+
+// ---------- AI email reading ----------
+function aiEmailCard(ai, s) {
+  const spent = ai.emailMonth ?? { cents: 0, emails: 0 };
+  const intro = '<p class="small">Every store writes order emails differently. When the built-in rules can\'t read an email that looks like a purchase, <strong>Claude Haiku 5.5</strong> reads it instead. About $0.50 per 1,000 emails.</p>';
+  const privacy = '<p class="small muted">Sent to Anthropic: the email\'s subject and text, with email addresses, phone numbers, card numbers and street-address lines removed. Every order number, item name and price the AI returns must appear in the email, or it\'s left out.</p>';
+  if (!ai.configured) {
+    return `${intro}<p class="small">To turn it on: create an API key at <strong>console.anthropic.com</strong> (Settings → API keys), add a little credit under Billing, put <code>ANTHROPIC_API_KEY=your-key</code> in the <code>.env</code> file, and restart the app.</p>${privacy}`;
+  }
+  return `${intro}
+    <form class="settings-form">
+      <label class="check"><input type="checkbox" name="aiEmailEnabled" ${s.aiEmailEnabled ? 'checked' : ''}> <span>Use AI for emails the rules can't read</span></label>
+      <label>Monthly limit ($)</label>
+      <input name="aiMonthlyCapDollars" type="number" min="0.10" max="50" step="0.10" value="${(s.aiMonthlyCapCents / 100).toFixed(2)}">
+      <p class="small muted">When the limit is reached, AI reading pauses until next month; those emails are tried again then.</p>
+      <div class="actions"><button class="btn primary">Save</button></div>
+    </form>
+    <p class="small">This month: <strong>$${(spent.cents / 100).toFixed(3)}</strong> for ${spent.emails} email${spent.emails === 1 ? '' : 's'} (limit $${(s.aiMonthlyCapCents / 100).toFixed(2)}).</p>
+    ${privacy}`;
 }
 
 // ---------- AI policy review ----------
@@ -493,6 +515,9 @@ async function renderSettings() {
       <div class="actions"><button class="btn primary">Save</button><button class="btn" type="button" id="run-now">Run checks now</button></div>
     </form>
 
+    <h2>AI email reading</h2>
+    <div class="card">${aiEmailCard(status.ai, s)}</div>
+
     <h2>Amazon order details</h2>
     <div class="card">${amazonSiteCard(status.amazonSite, s)}</div>
     ${ignored.length ? `<h2>Stores you stopped tracking</h2><div class="card">${ignored.map((st) => `<div class="row skip"><span class="small grow">${esc(st.name)} <span class="muted">(${esc(st.domain)})</span></span><button class="btn" type="button" data-unignore="${esc(st.domain)}">Track again</button></div>`).join('')}</div>` : ''}
@@ -544,6 +569,7 @@ async function renderSettings() {
     <div class="card small">
       <p style="margin-top:0">Everything is stored in a database file on the computer running this app. Your Gmail token is stored there too — never in the browser or in git.</p>
       <p><strong>Gmail → app:</strong> the app downloads only emails matching Amazon order/shipping/return/refund searches, keeps just the extracted details (order number, items, prices, dates, links) plus the subject, and does not save full email bodies.</p>
+      <p><strong>App → Anthropic (AI email reading, only if you turn it on):</strong> purchase-looking emails the rules couldn't read — subject and text, with email addresses, phone numbers, card numbers and street-address lines removed. Capped by your monthly limit.</p>
       <p><strong>App → Anthropic (AI policy review, only when you tap a review button):</strong> the store name, each item's name, its seller, and its order, delivery, and return dates, plus any policy link you added. <em>Not</em> sent: prices, order numbers, payment methods, your email address, or any email text. The AI reads policy pages only on the retailer's own website (and links you add).</p>
       <p>Sample items are never sent to the AI.</p>
     </div>
@@ -575,6 +601,7 @@ async function renderSettings() {
       if (!el.name) continue;
       body[el.name] = el.type === 'checkbox' ? el.checked : el.value;
     }
+    if (body.aiMonthlyCapDollars != null) { body.aiMonthlyCapCents = Math.round(Number(body.aiMonthlyCapDollars) * 100); delete body.aiMonthlyCapDollars; }
     try { await api('/settings', body); toast('Settings saved'); renderSettings(); } catch (err) { toast(err.message); }
   }));
   const topic = () => document.getElementById('topic').textContent.trim();

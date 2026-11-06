@@ -34,6 +34,7 @@ export const RETAILERS = {
     name: 'Other stores',
     gmailQuery: OTHER_STORES,
     triage: looksLikePurchase,
+    aiFallback: true, // AI reads purchase-looking emails the rules can't (if you turned it on)
     maxMessages: 2000,
     parse: parseGenericEmails,
     parserVersion: GENERIC_PARSER_VERSION,
