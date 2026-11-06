@@ -1,8 +1,11 @@
 // SQLite database setup. SQLite stores everything in one file on disk
 // (data/tracker.sqlite by default), so there's no database server to run.
 // Money is stored as integer cents to avoid floating-point rounding errors.
+//
+// We use the SQLite that's BUILT INTO Node.js (node:sqlite), so there's no
+// add-on to download or compile — installing works on any computer.
 
-import Database from 'better-sqlite3';
+import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -191,11 +194,62 @@ CREATE INDEX IF NOT EXISTS idx_events_item ON events(item_id);
 export { getSettings } from './settings.js';
 import { seedSettings } from './settings.js';
 
+// A thin adapter so the rest of the app can use simple calls:
+//   db.prepare(sql).run(...) / .get(...) / .all(...)   and   db.transaction(fn)
+// It (1) passes only the named values a statement actually uses, (2) returns
+// rows as ordinary objects, and (3) treats undefined as NULL.
+const NAMED = /[@:$]([A-Za-z_][A-Za-z0-9_]*)/g;
+
+function wrapStatement(stmt, sql) {
+  const names = [...new Set([...sql.matchAll(NAMED)].map((m) => m[1]))];
+  const fix = (args) => {
+    if (args.length === 1 && args[0] && typeof args[0] === 'object' && !Array.isArray(args[0]) && names.length) {
+      const src = args[0];
+      return [Object.fromEntries(names.map((n) => [n, src[n] === undefined ? null : src[n]]))];
+    }
+    return args.map((a) => (a === undefined ? null : a));
+  };
+  const plain = (row) => (row ? { ...row } : row);
+  return {
+    run: (...args) => stmt.run(...fix(args)),
+    get: (...args) => plain(stmt.get(...fix(args))),
+    all: (...args) => stmt.all(...fix(args)).map(plain),
+  };
+}
+
+class Db {
+  constructor(file) {
+    this.raw = new DatabaseSync(file);
+    this.depth = 0;
+  }
+  exec(sql) { return this.raw.exec(sql); }
+  prepare(sql) { return wrapStatement(this.raw.prepare(sql), sql); }
+  close() { this.raw.close(); }
+  /** db.transaction(fn) returns a function that runs fn all-or-nothing. Nested calls join the outer one. */
+  transaction(fn) {
+    return (...args) => {
+      if (this.depth > 0) return fn(...args);
+      this.raw.exec('BEGIN');
+      this.depth++;
+      try {
+        const result = fn(...args);
+        this.raw.exec('COMMIT');
+        return result;
+      } catch (e) {
+        this.raw.exec('ROLLBACK');
+        throw e;
+      } finally {
+        this.depth--;
+      }
+    };
+  }
+}
+
 export function openDb(file = process.env.DB_PATH || './data/tracker.sqlite') {
   if (file !== ':memory:') fs.mkdirSync(path.dirname(file), { recursive: true });
-  const db = new Database(file);
-  db.pragma('journal_mode = WAL');
-  db.pragma('foreign_keys = ON');
+  const db = new Db(file);
+  db.exec('PRAGMA journal_mode = WAL');
+  db.exec('PRAGMA foreign_keys = ON');
   db.exec(SCHEMA);
   migrate(db);
   seedSettings(db);

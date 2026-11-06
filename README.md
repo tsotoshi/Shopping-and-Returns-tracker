@@ -6,7 +6,7 @@ A personal, phone-friendly app that tracks purchases and returns, and follows ev
 
 ## Run it
 
-You need [Node.js](https://nodejs.org) 22.9 or newer (`node -v` to check).
+You need [Node.js](https://nodejs.org) 22.13 or newer (the database is built into Node, so nothing needs compiling) (`node -v` to check).
 
 ```bash
 npm install          # download dependencies (first time only)

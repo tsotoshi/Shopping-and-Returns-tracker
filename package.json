@@ -4,9 +4,9 @@
   "description": "Personal shopping & returns tracker",
   "main": "src/server.js",
   "scripts": {
-    "start": "node --env-file-if-exists=.env src/server.js",
-    "dev": "node --watch --env-file-if-exists=.env src/server.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "start": "node --disable-warning=ExperimentalWarning --env-file-if-exists=.env src/server.js",
+    "dev": "node --disable-warning=ExperimentalWarning --watch --env-file-if-exists=.env src/server.js",
+    "test": "node --disable-warning=ExperimentalWarning --test \"test/**/*.test.js\""
   },
   "repository": {
     "type": "git",
@@ -18,13 +18,12 @@
   "homepage": "https://github.com/tsotoshi/Shopping-and-Returns-tracker#readme",
   "dependencies": {
     "@anthropic-ai/sdk": "^1.5.0",
-    "better-sqlite3": "^13.0.3",
     "express": "^4.22.3",
     "nodemailer": "^10.3.1"
   },
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22.9"
+    "node": ">=22.13"
   }
 }
