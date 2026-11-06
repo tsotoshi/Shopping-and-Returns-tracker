@@ -10,7 +10,7 @@
 
 import { parseItems, parseCategoryItems, parseMonthDay, parseRefundTiming, parseArriving, paymentMethod, instructions } from './amazon.js';
 
-export const GENERIC_PARSER_VERSION = 1;
+export const GENERIC_PARSER_VERSION = 2; // v2: "Your Store.com order 123 is confirmed" subjects, Item # lines
 
 // Senders whose "orders" aren't returnable shopping (rides, food, money, subscriptions).
 const NOT_SHOPPING = [
@@ -54,7 +54,8 @@ export function classifyGeneric(subject) {
   if (/\breturn\b/.test(s)) return 'return_started';
   if (/\bdelivered\b|has arrived|was delivered/.test(s)) return 'delivered';
   if (/\bshipped\b|on (?:its|the) way|has been sent|out for delivery|shipment/.test(s)) return 'shipped';
-  if (/order (?:confirmation|confirmed|received|placed|#)|thanks? (?:you )?for (?:your )?(?:order|purchase)|your (?:\w+ )?order|receipt for your|purchase confirmation/.test(s)) return 'order_confirmation';
+  if (/order (?:confirmation|confirmed|received|placed|#)|thanks? (?:you )?for (?:your )?(?:order|purchase)|your (?:[\w.'-]+ )?order|receipt for your|purchase confirmation/.test(s)) return 'order_confirmation';
+  if (/\border\b.*\b(?:is |has been |was )?(?:confirmed|received|placed)\b/.test(s)) return 'order_confirmation';
   return null;
 }
 
@@ -128,7 +129,10 @@ export function parseGenericEmails(msg) {
     orders = structured.map((o) => ({ ...o, kind: o.kind ?? subjectKind ?? 'order_confirmation', fromMarkup: true }));
   } else {
     if (!subjectKind) return [];
-    const orderNumber = (msg.subject.match(ORDER_NUM_RE) || text.match(ORDER_NUM_RE) || msg.subject.match(/#\s?([A-Z0-9][A-Z0-9-]{5,30})\b/i) || [])[1] ?? null;
+    const orderNumber = (msg.subject.match(ORDER_NUM_RE) || text.match(ORDER_NUM_RE)
+      || msg.subject.match(/#\s?([A-Z0-9][A-Z0-9-]{5,30})\b/i)
+      || msg.subject.match(/\border\s+(\d[A-Z0-9-]{5,30})\b/i) // "Your Costco.com order 1317669410 is confirmed"
+      || [])[1] ?? null;
     if (!orderNumber) return []; // can't tie it to an order: skip rather than guess
     let items = parseItems(lines);
     if (!items.length) items = parseCategoryItems(lines).map((it) => ({ ...it, categoryName: true }));

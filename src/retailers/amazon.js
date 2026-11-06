@@ -71,7 +71,10 @@ export function parseItems(lines) {
     let name = null;
     let price = null;
     let seller = null;
+    let itemNumber = null;
     const look = (l) => {
+      const num = l.match(/^(?:item|sku|model)\s*(?:#|no\.?|number)\s*:?\s*([A-Z0-9-]{3,})$/i);
+      if (num) { itemNumber ??= num[1]; return true; }
       const sold = l.match(/^sold by\s*:?\s*(.+)$/i);
       if (sold) { seller ??= sold[1].trim(); return true; }
       const money = l.match(/^\$\s?\d/) && l.match(MONEY_RE);
@@ -88,7 +91,7 @@ export function parseItems(lines) {
       if (/^(?:quantity|qty)\b/i.test(lines[j])) break;
       look(lines[j]);
     }
-    if (name) items.push({ name: name.replace(/\.{3}$|…$/, '').trim(), quantity: Number(q[1]), unitPriceCents: price, seller });
+    if (name) items.push({ name: name.replace(/\.{3}$|…$/, '').trim(), quantity: Number(q[1]), unitPriceCents: price, seller, ...(itemNumber ? { retailerItemId: itemNumber } : {}) });
   }
   return items;
 }

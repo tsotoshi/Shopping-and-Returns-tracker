@@ -227,3 +227,15 @@ test('only orders still missing prices get their detail pages loaded', async () 
   await runBridge({ python: 'py', script: 's', skipDetails: ordersWithPrices(db), spawnImpl: (cmd, a) => { args = a; return fakeSpawn({ stdout: '{"ok":true,"orders":[]}' })(); } });
   assert.deepEqual(args, ['s', '--time-filter', 'last30', '--skip-details', '111-3646931-0001058']);
 });
+
+test('Costco-style confirmation: "order N is confirmed" subject, item numbers are not names', () => {
+  const [p] = parse({ id: 'c1', subject: 'Your Costco.com order 1317669410 is confirmed!', from: 'Costco Orders <Costco@orders.costco.com>', date: '2026-09-27T23:57:00',
+    text: 'Thank you for your order\nSamsung 65" Class - S85H OLED Series - 4K Vision AI Smart TV\nItem #1711427\nQty: 1\n$1,799.99\nOrder Total: $1,925.99' });
+  assert.equal(p.kind, 'order_confirmation');
+  assert.equal(p.retailer, 'costco.com');
+  assert.equal(p.merchantName, 'Costco');
+  assert.equal(p.orderNumber, '1317669410');
+  assert.equal(p.orderDate, '2026-09-27');
+  assert.deepEqual(p.items.map((i) => [i.name, i.retailerItemId, i.quantity, i.unitPriceCents]), [['Samsung 65" Class - S85H OLED Series - 4K Vision AI Smart TV', '1711427', 1, 179999]]);
+  assert.equal(p.orderTotalCents, 192599);
+});
