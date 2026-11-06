@@ -659,7 +659,6 @@ function purchaseFlags(r) {
   if (r.name_source === 'email_category') f.push('<span class="badge warn" title="The email only gave a category, not the product name">category only</span>');
   if (r.amount_cents == null) f.push('<span class="badge" title="No price found">no price</span>');
   else if (r.price_is_total) f.push('<span class="badge warn" title="This is the order\'s grand total, including tax">= order total</span>');
-  if (r.seller) f.push(`<span class="badge" title="Third-party seller">${esc(r.seller)}</span>`);
   return f.join(' ');
 }
 
@@ -668,7 +667,7 @@ function toCsv(rows) {
     ['Order date', (r) => r.order_date], ['Merchant', (r) => r.merchant], ['Item', (r) => r.name], ['Name in email', (r) => r.email_name],
     ['Qty', (r) => r.quantity], ['Amount', (r) => dollars(r.amount_cents)], ['Price is order total', (r) => (r.price_is_total ? 'yes' : '')],
     ['Order total', (r) => dollars(r.order_total_cents)], ['Order #', (r) => r.order_number], ['Data source', (r) => r.source],
-    ['Seller', (r) => r.seller], ['Payment', (r) => r.payment_method], ['Delivered', (r) => r.delivered_date],
+    ['Payment', (r) => r.payment_method], ['Delivered', (r) => r.delivered_date],
     ['Expected delivery', (r) => r.estimated_delivery_date], ['Return by', (r) => r.return_deadline], ['Status', (r) => r.stage_label], ['Email link', (r) => r.email_link],
   ];
   const cell = (v) => {
@@ -701,16 +700,16 @@ async function renderPurchases() {
         <input id="pq" type="search" placeholder="Search item, merchant, order #" value="${esc(purchaseView.q)}">
         <select id="pm"><option value="">All merchants</option>${merchants.map((m) => `<option ${purchaseView.merchant === m ? 'selected' : ''}>${esc(m)}</option>`).join('')}</select>
         <select id="ps" class="mobile-only" aria-label="Sort">
-          ${[['date', 'Date'], ['merchant', 'Merchant'], ['amount', 'Amount'], ['item', 'Item'], ['total', 'Order total']].map(([k, l]) => ['desc', 'asc'].map((d) => `<option value="${k}:${d}" ${purchaseView.sort === k && purchaseView.dir === d ? 'selected' : ''}>Sort: ${l} ${d === 'asc' ? (k === 'date' ? '(oldest)' : k === 'amount' || k === 'total' ? '(low → high)' : '(A → Z)') : (k === 'date' ? '(newest)' : k === 'amount' || k === 'total' ? '(high → low)' : '(Z → A)')}</option>`).join('')).join('')}
+          ${[['date', 'Order date'], ['merchant', 'Merchant'], ['amount', 'Amount'], ['item', 'Item'], ['total', 'Order total']].map(([k, l]) => ['desc', 'asc'].map((d) => `<option value="${k}:${d}" ${purchaseView.sort === k && purchaseView.dir === d ? 'selected' : ''}>Sort: ${l} ${d === 'asc' ? (k === 'date' ? '(oldest)' : k === 'amount' || k === 'total' ? '(low → high)' : '(A → Z)') : (k === 'date' ? '(newest)' : k === 'amount' || k === 'total' ? '(high → low)' : '(Z → A)')}</option>`).join('')).join('')}
         </select>
       </div>
       <p class="small muted">${rows.length} item${rows.length === 1 ? '' : 's'} in ${orders.size} order${orders.size === 1 ? '' : 's'} · order totals ${money(totalCents)}
         ${noPrice || categoryOnly ? `<br>Data checks: ${noPrice ? `${noPrice} without a price` : ''}${noPrice && categoryOnly ? ' · ' : ''}${categoryOnly ? `${categoryOnly} with category-only names` : ''}` : ''}</p>
       ${rows.length ? `<table class="ptable">
-        <thead><tr>${th('date', 'Date')}${th('merchant', 'Merchant')}${th('item', 'Item')}<th class="num">Qty</th>${th('amount', 'Amount', 'num')}${th('total', 'Order total', 'num')}<th>Order #</th></tr></thead>
+        <thead><tr>${th('date', 'Order date')}${th('merchant', 'Merchant')}${th('item', 'Item')}<th class="num">Qty</th>${th('amount', 'Amount', 'num')}${th('total', 'Order total', 'num')}<th>Order #</th></tr></thead>
         <tbody>${rows.map((r) => `
           <tr data-id="${r.id}">
-            <td data-label="Date">${niceDate(r.order_date)}</td>
+            <td data-label="Order date">${niceDate(r.order_date)}</td>
             <td data-label="Merchant">${esc(r.merchant)}</td>
             <td data-label="Item" class="item"><a href="#/item/${r.id}">${esc(r.name)}</a>
               <div class="small muted mobile-only">${esc(r.merchant)} · ${niceDate(r.order_date)}${(r.quantity ?? 1) > 1 ? ` · Qty ${r.quantity}` : ''}${r.order_total_cents != null ? ` · order ${money(r.order_total_cents)}` : ''}</div>
