@@ -146,7 +146,8 @@ function enrich(db, row, it, { orderUrl, today, positional }) {
 
 /** Merge amazon-orders results into the database. Returns counts for the sync summary. */
 export function applyAmazonOrders(db, orders, { today = todayISO() } = {}) {
-  const summary = { orders: 0, named: 0, created: 0, returnDates: 0 };
+  const summary = { orders: 0, named: 0, created: 0, returnDates: 0, priced: 0 };
+  const unpriced = new Set(db.prepare("SELECT id FROM items WHERE unit_price_cents IS NULL OR IFNULL(notes, '') LIKE '%grand total%'").all().map((r) => r.id));
   db.transaction(() => {
     for (const o of orders ?? []) {
       if (!o.order_number || o.cancelled) continue;
@@ -211,6 +212,8 @@ export function applyAmazonOrders(db, orders, { today = todayISO() } = {}) {
       summary.returnDates += Math.max(0, after - returnDatesBefore);
     }
   })();
+  summary.priced = db.prepare("SELECT id FROM items WHERE unit_price_cents IS NOT NULL AND IFNULL(notes, '') NOT LIKE '%grand total%'").all()
+    .filter((r) => unpriced.has(r.id)).length;
   return summary;
 }
 

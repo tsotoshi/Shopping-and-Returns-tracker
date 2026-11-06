@@ -48,6 +48,7 @@ test('Amazon order page fills names/prices and its grand total wins', async () =
   applyAmazonOrders(db, [{ order_number: '111-7056707-4221854', order_placed_date: '2026-11-05', grand_total: 23.36,
     items: [{ title: 'Clear Storage Bins, 3 Pack', price: 21.49, quantity: 1 }] }], { today: '2026-11-06' });
   const bins = purchases(db).find((r) => r.order_number === '111-7056707-4221854');
+  assert.ok(bins, 'order present');
   assert.equal(bins.name, 'Clear Storage Bins, 3 Pack');
   assert.equal(bins.amount_cents, 2149);
   assert.equal(bins.price_is_total, false, 'grand-total note removed once the real price is known');

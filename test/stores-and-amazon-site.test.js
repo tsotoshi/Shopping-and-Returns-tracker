@@ -283,3 +283,20 @@ test('order emails with an unhelpful subject are recognized from their text', ()
   assert.equal(p.items[0].name, 'Trail Running Shoe');
   assert.deepEqual(parse({ id: 'x2', subject: '30% off this weekend only', from: 'REI <rei@notices.rei.com>', text: 'Thank you for your order! Order number: 1234567' }), []);
 });
+
+test('after the rules change, the next sync searches the full window again (once)', async () => {
+  const db = openDb(':memory:');
+  saveAccount(db, { email: 'me@example.com', tokens: { refresh_token: 'r', access_token: 'a', expires_in: 3600, scope: 's' } });
+  const gmail = fakeGmail([]);
+  await syncGmail(db, { client: gmail });
+  await syncGmail(db, { client: gmail });
+  const other = () => gmail.calls.list.filter((q) => q.startsWith('-from:amazon.com'));
+  assert.match(other()[0], /newer_than:180d/);
+  assert.match(other()[1], /after:/, 'normal syncs only look at recent mail');
+
+  db.prepare("UPDATE settings SET value = 'old-rules' WHERE key = 'sync_scope:other'").run(); // simulate a rules upgrade
+  await syncGmail(db, { client: gmail });
+  assert.match(other()[2], /newer_than:180d/, 'full window after a change');
+  await syncGmail(db, { client: gmail });
+  assert.match(other()[3], /after:/, 'then back to recent mail');
+});

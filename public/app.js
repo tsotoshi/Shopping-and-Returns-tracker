@@ -188,7 +188,7 @@ function amazonSiteCard(a, s) {
       <label class="check"><input type="checkbox" name="amazonSiteEnabled" ${s.amazonSiteEnabled ? 'checked' : ''}> <span>Get Amazon purchases from my Amazon order pages (real names, prices, return dates). Amazon emails are then only used for returns and refunds.</span></label>
       <div class="actions"><button class="btn primary">Save</button>${s.amazonSiteEnabled ? '<button class="btn" type="button" id="amazon-now">Check Amazon now</button>' : ''}</div>
     </form>
-    ${last ? `<p class="small ${last.ok ? 'muted' : ''}">Last check: ${new Date(last.at).toLocaleString()} — ${last.ok ? `${last.summary.orders} orders read, ${last.summary.named + last.summary.created} items updated, ${last.summary.returnDates} return dates added` : esc(amazonError(last.error))}</p>` : ''}
+    ${last ? `<p class="small ${last.ok ? 'muted' : ''}">Last check: ${new Date(last.at).toLocaleString()} — ${last.ok ? `${last.summary.orders} orders read · ${last.summary.named + last.summary.created} names · ${last.summary.priced ?? 0} prices · ${last.summary.returnDates} return dates added` : esc(amazonError(last.error))}</p>` : ''}
     ${last && !last.ok && last.error === 'signin_required' ? '<div class="notice warn">Sign in again: in Terminal, in the app folder, run <code>.venv/bin/amazon-orders login --browser</code>, then tap Check Amazon now.</div>' : ''}
     <details><summary class="small">Setup steps (for reference)</summary>${steps}</details>`;
 }
@@ -553,7 +553,7 @@ async function renderSettings() {
     e.target.disabled = true; e.target.textContent = 'Checking Amazon… (up to a minute)';
     try {
       const r = await api('/amazon-site/run', {});
-      toast(r.ok ? `Amazon: ${r.orders} orders read, ${r.named + r.created} items updated, ${r.returnDates} return dates added` : amazonError(r.error));
+      toast(r.ok ? `Amazon: ${r.orders} orders read · ${r.named + r.created} names · ${r.priced ?? 0} prices · ${r.returnDates} return dates added` : amazonError(r.error));
     } catch (err) { toast(err.message); }
     renderSettings();
   });

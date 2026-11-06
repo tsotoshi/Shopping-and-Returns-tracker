@@ -31,6 +31,7 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
                            VALUES (@p, @id, @reason, @subject, @from, @receivedAt, @v)`);
   const importedThisRun = new Set(); // once a store group imports an email, others leave it alone
   const foundIds = new Set();
+  const fullScans = []; // remembered only if the whole sync succeeds
   const counted = new Set(); // each email counts once in the summary, even if two store groups look at it
   const once = (id, key) => { if (counted.has(id)) return; counted.add(id); c[key]++; };
   const errors = [];
@@ -45,10 +46,17 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
       if (!r.parse) continue;
       const opts = { amazonFromSite };
       const baseQuery = typeof r.gmailQuery === 'function' ? r.gmailQuery(opts) : r.gmailQuery;
-      const q = `${baseQuery} ${since ? `after:${since.replace(/-/g, '/')}` : `newer_than:${firstSyncDays}d`}`;
+      // When this store group's rules or search changed since its last full look,
+      // search the whole window again once (older skipped emails get re-checked).
+      const scanKey = `sync_scope:${r.id}`;
+      const scope = `${r.parserVersion ?? 1}${r.modeTag ? r.modeTag(opts) : ''}|${baseQuery}`;
+      const lastScope = db.prepare('SELECT value FROM settings WHERE key = ?').get(scanKey)?.value;
+      const fullScan = !since || lastScope !== scope;
+      const q = `${baseQuery} ${fullScan ? `newer_than:${firstSyncDays}d` : `after:${since.replace(/-/g, '/')}`}`;
       const ids = (await client.listMessageIds(q, r.maxMessages ?? maxMessages)).reverse(); // oldest first: orders before deliveries
       const skipKinds = r.skipKinds ? r.skipKinds(opts) : [];
       for (const id of ids) foundIds.add(id);
+      fullScans.push({ scanKey, scope });
       c.found = foundIds.size;
       // The version includes the mode, so switching Amazon order details on/off re-checks skipped emails.
       const v = `${r.parserVersion ?? 1}${r.modeTag ? r.modeTag(opts) : ''}`;
@@ -108,6 +116,8 @@ export async function syncGmail(db, { client, firstSyncDays = 180, maxMessages =
       }
     }
     db.prepare("UPDATE gmail_account SET last_sync_at = datetime('now') WHERE id = 1").run();
+    const saveScope = db.prepare('INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value');
+    for (const f of fullScans) saveScope.run(f.scanKey, f.scope);
     db.prepare(`UPDATE sync_runs SET finished_at = @finished, status = 'ok', found = @found, imported = @imported, already_had = @already_had,
                 needs_review = @needs_review, ignored = @ignored, failed = @failed, message = @message WHERE id = @id`)
       .run({ ...c, finished: new Date().toISOString(), message: errors.slice(0, 3).join('; ') || null, id: runId });
